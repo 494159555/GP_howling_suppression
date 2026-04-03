@@ -62,6 +62,8 @@ def parse_args():
     parser.add_argument('--debug', action='store_true', help='调试模式（3 epochs）')
     parser.add_argument('--skip-existing', action='store_true',
                         help='跳过已有检查点的模型')
+    parser.add_argument('--gpus', type=str, default=None,
+                        help='指定使用的GPU，例如 "0,1,2" 表示使用前3张卡')
     return parser.parse_args()
 
 
@@ -106,6 +108,8 @@ def train_single_model(model_name, config_path, args):
         cmd.extend(['--seed', str(args.seed)])
     if args.debug:
         cmd.append('--debug')
+    if args.gpus is not None:
+        cmd.extend(['--gpus', args.gpus])
 
     cmd.extend(['--exp-name', f'unified_{model_name}'])
 

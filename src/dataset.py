@@ -69,6 +69,16 @@ class HowlingDataset(Dataset):
             n_fft=self.n_fft, hop_length=self.hop_length, power=2.0
         )
 
+    def _fix_length(self, waveform: torch.Tensor) -> torch.Tensor:
+        """将音频波形填充或截断到 chunk_size 长度"""
+        length = waveform.shape[1]
+        if length < self.chunk_size:
+            pad_len = self.chunk_size - length
+            return F.pad(waveform, (0, pad_len))
+        elif length > self.chunk_size:
+            return waveform[:, :self.chunk_size]
+        return waveform
+
     def __len__(self) -> int:
         """数据集样本数"""
         return len(self.filenames)
@@ -85,7 +95,8 @@ class HowlingDataset(Dataset):
         # 1. 加载音频
         file_name = self.filenames[idx]
         howling_path = os.path.join(self.howling_dir, file_name)
-        clean_path = os.path.join(self.clean_dir, file_name)
+        clean_name = file_name.replace('_howling.wav', '_clean.wav')
+        clean_path = os.path.join(self.clean_dir, clean_name)
 
         try:
             howling_wave, sr_h = torchaudio.load(howling_path)
@@ -94,14 +105,9 @@ class HowlingDataset(Dataset):
             print(f"加载 {file_name} 失败: {e}")
             return self._get_zero_tensors()
 
-        # 2. 音频长度归一化
-        if howling_wave.shape[1] < self.chunk_size:
-            pad_len = self.chunk_size - howling_wave.shape[1]
-            howling_wave = F.pad(howling_wave, (0, pad_len))
-            clean_wave = F.pad(clean_wave, (0, pad_len))
-        else:
-            howling_wave = howling_wave[:, :self.chunk_size]
-            clean_wave = clean_wave[:, :self.chunk_size]
+        # 2. 音频长度归一化（独立处理，确保两者长度一致）
+        howling_wave = self._fix_length(howling_wave)
+        clean_wave = self._fix_length(clean_wave)
 
         # 3. 应用音频增强
         if self.augment and self.audio_aug is not None:

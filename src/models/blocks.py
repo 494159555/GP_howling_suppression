@@ -21,7 +21,7 @@ def make_encoder_block(in_channels: int, out_channels: int) -> nn.Sequential:
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=(2, 1), padding=1),
         nn.BatchNorm2d(out_channels),
-        nn.LeakyReLU(0.2, inplace=True),
+        nn.LeakyReLU(0.2),
     )
 
 
@@ -43,7 +43,7 @@ def make_decoder_block(in_channels: int, out_channels: int) -> nn.Sequential:
             kernel_size=3, stride=(2, 1), padding=1, output_padding=(1, 0),
         ),
         nn.BatchNorm2d(out_channels),
-        nn.ReLU(inplace=True),
+        nn.ReLU(),
     )
 
 

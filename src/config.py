@@ -12,7 +12,8 @@ class Config:
     # ============ 路径配置 ============
     PROJECT_ROOT = Path(__file__).parent.parent
     
-    DATA_ROOT = PROJECT_ROOT / "data"
+    # DATA_ROOT = PROJECT_ROOT / "data"
+    DATA_ROOT=Path("/mnt/ent_disk0/syx/howling_data")
     
     TRAIN_CLEAN_DIR = DATA_ROOT / "train" / "clean"
     TRAIN_NOISY_DIR = DATA_ROOT / "train" / "howling"
@@ -30,10 +31,10 @@ class Config:
     HOP_LENGTH = 128         # STFT跳跃长度
     
     # ============ 训练超参数 ============
-    BATCH_SIZE = 8           # 批大小
+    BATCH_SIZE = 16          # 批大小（多卡训练建议32+）
     LEARNING_RATE = 1e-4     # 学习率
-    NUM_EPOCHS = 50          # 训练轮数
-    NUM_WORKERS = 2          # 数据加载线程数
+    NUM_EPOCHS = 100          # 训练轮数
+    NUM_WORKERS = 4          # 数据加载线程数（建议: GPU数×2~4）
     
     # 学习率调度器参数
     SCHEDULER_FACTOR = 0.5
@@ -71,7 +72,7 @@ class Config:
     DEFAULT_LOSS = 'multitask'
 
     # ============ 训练策略配置 ============
-    USE_MIXED_PRECISION = False  # 是否使用混合精度训练
+    USE_MIXED_PRECISION = True   # 是否使用混合精度训练（RTX 3090建议开启）
     CURRICULUM_LEARNING = False  # 是否使用课程学习
     LR_SCHEDULER_TYPE = 'plateau'  # 学习率调度器类型: 'plateau', 'cosine_warmup', 'one_cycle', 'step'
     

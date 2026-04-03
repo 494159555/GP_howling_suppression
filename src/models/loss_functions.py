@@ -137,22 +137,22 @@ class Discriminator(nn.Module):
         self.conv_layers = nn.Sequential(
             nn.Conv2d(input_channels, 64, kernel_size=4, stride=(2, 1), padding=1),
             nn.BatchNorm2d(64),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.LeakyReLU(0.2),
             
             nn.Conv2d(64, 128, kernel_size=4, stride=(2, 1), padding=1),
             nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.LeakyReLU(0.2),
             
             nn.Conv2d(128, 256, kernel_size=4, stride=(2, 1), padding=1),
             nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.LeakyReLU(0.2),
         )
         
         self.final_layer = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
             nn.Linear(256, 1),
-            nn.Sigmoid()
+            # 注意：不使用 Sigmoid，配合 BCEWithLogitsLoss 以兼容 autocast
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -174,7 +174,7 @@ class AdversarialLoss(nn.Module):
         self.loss_type = loss_type
         
         if loss_type == 'standard':
-            self.criterion = nn.BCELoss()
+            self.criterion = nn.BCEWithLogitsLoss()
         elif loss_type == 'lsgan':
             self.criterion = nn.MSELoss()
         elif loss_type == 'wgan':
