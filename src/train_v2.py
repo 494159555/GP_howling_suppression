@@ -1,7 +1,8 @@
-"""训练模块
+"""训练模块 v2 — 专为 unet_v10_gan 设计
 
-音频啸叫抑制模型训练脚本，支持实验管理、监控和可视化
-支持5种U-Net变体、多种损失函数、训练策略和数据增强
+与 train.py 的区别：
+  - 判别器不再使用 Sigmoid，输出 raw logits
+  - 所有 BCELoss → BCEWithLogitsLoss，兼容 AMP autocast
 """
 
 import argparse
@@ -87,21 +88,16 @@ def is_main_process(rank: int = 0) -> bool:
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
-        description='音频啸叫抑制模型训练脚本',
+        description='音频啸叫抑制模型训练脚本 v2 (GAN专用, AMP兼容)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   # 单卡训练
-  python src/train.py                                    # 使用默认配置
-  python src/train.py --model unet_v6_optimized          # 训练指定模型
+  python -m src.train_v2 --model unet_v10_gan
 
   # DDP 多卡训练 (推荐，使用 torchrun)
-  torchrun --nproc_per_node=4 src/train.py --model unet_v2
-  torchrun --nproc_per_node=4 src/train.py --config configs/unet_v2.yaml --lr 2e-4
-  torchrun --nproc_per_node=4 src/train.py --model unet_v10_gan --exp-name gan_test
-
-  # 指定 GPU（通过环境变量）
-  CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 src/train.py
+  torchrun --nproc_per_node=2 -m src.train_v2 --model unet_v10_gan
+  CUDA_VISIBLE_DEVICES=1,3 torchrun --nproc_per_node=2 -m src.train_v2 --model unet_v10_gan
         """
     )
 
@@ -109,9 +105,9 @@ def parse_args():
     parser.add_argument(
         '--model',
         type=str,
-        default=cfg.DEFAULT_MODEL,
+        default='unet_v10_gan',
         choices=list(cfg.AVAILABLE_MODELS.keys()),
-        help=f'选择模型 (默认: {cfg.DEFAULT_MODEL})'
+        help=f'选择模型 (默认: unet_v10_gan)'
     )
 
     # 配置文件
@@ -449,6 +445,9 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device,
                     gan_lambda=100.0, use_amp=False):
     """训练一个epoch
 
+    v2 变更: 使用 nn.BCEWithLogitsLoss() 替代 nn.BCELoss()，
+             以兼容 AMP autocast。
+
     Args:
         model: 生成器模型
         dataloader: 数据加载器
@@ -470,6 +469,9 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device,
 
     total_loss = 0.0
 
+    # v2: BCEWithLogitsLoss 安全兼容 autocast
+    bce_loss = nn.BCEWithLogitsLoss()
+
     for noisy_mag, clean_mag in dataloader:
         noisy_mag = noisy_mag.to(device)
         clean_mag = clean_mag.to(device)
@@ -482,62 +484,73 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device,
             with autocast():
                 pred_mag = model(noisy_mag)
 
-                if discriminator is not None:
-                    # GAN训练 - 分离两个步骤
-                    valid = torch.ones(noisy_mag.size(0), 1).to(device)
-                    fake = torch.zeros(noisy_mag.size(0), 1).to(device)
+            if discriminator is not None:
+                # GAN训练 - 分离两个步骤
+                valid = torch.ones(noisy_mag.size(0), 1, device=device)
+                fake = torch.zeros(noisy_mag.size(0), 1, device=device)
 
-                    # 步骤1: 训练判别器
-                    real_loss = nn.BCELoss()(discriminator(clean_mag.detach()), valid)
-                    fake_loss = nn.BCELoss()(discriminator(pred_mag.detach()), fake)
-                    disc_loss = (real_loss + fake_loss) / 2
+                # 步骤1: 训练判别器
+                # 分开前向+反向，避免 BatchNorm running buffer 被原地修改导致版本冲突
+                disc_optimizer.zero_grad()
 
-                    scaler.scale(disc_loss).backward()
-                    if disc_optimizer is not None:
-                        scaler.step(disc_optimizer)
-                        disc_optimizer.zero_grad()
+                with autocast():
+                    real_pred = discriminator(clean_mag.detach())
+                    real_loss = bce_loss(real_pred, valid)
+                scaler.scale(real_loss * 0.5).backward()
 
-                    # 步骤2: 训练生成器（判别器参数已固定）
-                    scaler.update()
-                    scaler.unscale_(optimizer)
-                    optimizer.zero_grad()
+                with autocast():
+                    fake_pred = discriminator(pred_mag.detach())
+                    fake_loss = bce_loss(fake_pred, fake)
+                scaler.scale(fake_loss * 0.5).backward()
 
-                    with autocast():
-                        gen_loss = criterion(pred_mag, clean_mag)
-                        adv_loss = nn.BCELoss()(discriminator(pred_mag), valid)
-                        loss = gen_loss + gan_lambda * adv_loss
+                scaler.step(disc_optimizer)
 
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
+                # 步骤2: 训练生成器
+                optimizer.zero_grad()
+                disc_optimizer.zero_grad()
+
+                with autocast():
+                    gen_loss = criterion(pred_mag, clean_mag)
+                    adv_loss = bce_loss(discriminator(pred_mag), valid)
+                    loss = gen_loss + gan_lambda * adv_loss
+
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                with autocast():
                     loss = criterion(pred_mag, clean_mag)
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
         else:
             pred_mag = model(noisy_mag)
 
             if discriminator is not None:
                 # GAN训练 - 分离两个步骤
-                valid = torch.ones(noisy_mag.size(0), 1).to(device)
-                fake = torch.zeros(noisy_mag.size(0), 1).to(device)
+                valid = torch.ones(noisy_mag.size(0), 1, device=device)
+                fake = torch.zeros(noisy_mag.size(0), 1, device=device)
 
                 # 步骤1: 训练判别器
-                real_loss = nn.BCELoss()(discriminator(clean_mag.detach()), valid)
-                fake_loss = nn.BCELoss()(discriminator(pred_mag.detach()), fake)
-                disc_loss = (real_loss + fake_loss) / 2
+                # 分开前向+反向，避免 BatchNorm running buffer 被原地修改导致版本冲突
+                disc_optimizer.zero_grad()
 
-                disc_loss.backward()
-                if disc_optimizer is not None:
-                    disc_optimizer.step()
-                    disc_optimizer.zero_grad()
+                real_pred = discriminator(clean_mag.detach())
+                real_loss = bce_loss(real_pred, valid)
+                (real_loss * 0.5).backward()
 
-                # 步骤2: 训练生成器（判别器参数已固定）
+                fake_pred = discriminator(pred_mag.detach())
+                fake_loss = bce_loss(fake_pred, fake)
+                (fake_loss * 0.5).backward()
+
+                disc_optimizer.step()
+
+                # 步骤2: 训练生成器
                 optimizer.zero_grad()
+                disc_optimizer.zero_grad()
 
                 gen_loss = criterion(pred_mag, clean_mag)
-                adv_loss = nn.BCELoss()(discriminator(pred_mag), valid)
+                adv_loss = bce_loss(discriminator(pred_mag), valid)
                 loss = gen_loss + gan_lambda * adv_loss
 
                 loss.backward()
@@ -584,16 +597,15 @@ def train() -> None:
     """训练模型（支持 DDP 和 DataParallel 两种多卡模式）
 
     单卡训练:
-        python -m src.train
-        python -m src.train --model unet_v2
+        python -m src.train_v2
+        python -m src.train_v2 --model unet_v10_gan
 
     DataParallel 多卡训练 (简单，用 --gpus 指定):
-        python -m src.train --gpus 0,1,2,3
-        python -m src.train --gpus 0,1,2,3 --model unet_v2
+        python -m src.train_v2 --gpus 0,1,2,3
 
     DDP 多卡训练 (推荐，性能更好，用 torchrun 启动):
-        torchrun --nproc_per_node=4 -m src.train --model unet_v2
-        CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 -m src.train
+        torchrun --nproc_per_node=2 -m src.train_v2 --model unet_v10_gan
+        CUDA_VISIBLE_DEVICES=1,3 torchrun --nproc_per_node=2 -m src.train_v2
     """
     args = parse_args()
 
@@ -792,14 +804,29 @@ def train() -> None:
     model_class = get_model_class(model_name)
     model = model_class().to(device)
 
-    # 多 GPU 并行训练
+    # ========== 4b. GAN: 提前分离判别器（必须在 DDP 包装之前！） ==========
+    # v2: 将判别器从生成器模型中分离，避免 DDP 在同一 iteration 中
+    #     对判别器参数标记 ready 两次（一次判别器训练，一次生成器训练）。
+    gan_lambda = config_override.get('gan_lambda', 100.0)
+    discriminator = None
+    disc_optimizer = None
+    raw_discriminator = None          # 保存判别器原始引用（无 DDP 包装）
+    is_gan = (model_name == 'unet_v10_gan') or isinstance(model, AudioUNet5GAN)
+
+    if is_gan and hasattr(model, 'discriminator'):
+        # 在 DDP 包装之前就把判别器取出
+        raw_discriminator = model.discriminator
+        model.discriminator = None    # 从 nn.Module 的子模块列表中移除
+        if is_main:
+            print(f"🤖 GAN训练: λ={gan_lambda}")
+            print(f"   判别器已从生成器分离（DDP 前提取）")
+
+    # 多 GPU 并行训练（生成器）
     if use_ddp:
-        # DDP 模式（通过 torchrun 启动）
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
         if is_main:
             print(f"🔧 模型: {model.module.__class__.__name__} (DDP, {world_size} GPUs)")
     elif gpu_ids is not None and len(gpu_ids) > 1:
-        # DataParallel 模式（通过 --gpus 指定）
         model = nn.DataParallel(model, device_ids=gpu_ids)
         print(f"🔧 模型: {model.module.__class__.__name__} (DataParallel, {len(gpu_ids)} GPUs)")
     else:
@@ -809,6 +836,9 @@ def train() -> None:
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     if is_main:
         print(f"📊 参数量: {total_params:,}\n")
+
+    # 获取实际模型（处理 DDP / DataParallel 包装）
+    raw_model = model.module if isinstance(model, (DDP, nn.DataParallel)) else model
 
     # ========== 5. 损失函数和优化器 ==========
     loss_type = config_override.get('loss_function', cfg.DEFAULT_LOSS)
@@ -833,21 +863,16 @@ def train() -> None:
     if is_main:
         print(f"📈 学习率调度: {lr_scheduler_type}")
 
-    # ========== 6. GAN组件（如果需要） ==========
-    discriminator = None
-    disc_optimizer = None
-    gan_lambda = config_override.get('gan_lambda', 100.0)
-
-    # 获取实际模型（处理 DDP / DataParallel 包装）
-    raw_model = model.module if isinstance(model, (DDP, nn.DataParallel)) else model
-
-    if model_name == 'unet_v10_gan' or isinstance(raw_model, AudioUNet5GAN):
-        if hasattr(raw_model, 'discriminator'):
-            discriminator = raw_model.discriminator
-            disc_lr = config_override.get('disc_lr', 1e-4)
-            disc_optimizer = torch.optim.Adam(discriminator.parameters(), lr=disc_lr)
-            if is_main:
-                print(f"🤖 GAN训练: λ={gan_lambda}, disc_lr={disc_lr}")
+    # ========== 6. 判别器: 独立 DDP 包装 + 优化器 ==========
+    if raw_discriminator is not None:
+        disc_lr = config_override.get('disc_lr', 1e-4)
+        disc_optimizer = torch.optim.Adam(raw_discriminator.parameters(), lr=disc_lr)
+        if use_ddp:
+            discriminator = DDP(raw_discriminator, device_ids=[local_rank], output_device=local_rank)
+        else:
+            discriminator = raw_discriminator
+        if is_main:
+            print(f"   判别器 DDP={'是' if use_ddp else '否'}, disc_lr={disc_lr}")
 
     # ========== 7. 混合精度训练 ==========
     use_amp = config_override.get('mixed_precision', cfg.USE_MIXED_PRECISION)
@@ -963,8 +988,8 @@ def train() -> None:
                 "config": config_dict,
             }
 
-            if discriminator is not None:
-                checkpoint["discriminator_state_dict"] = discriminator.state_dict()
+            if raw_discriminator is not None:
+                checkpoint["discriminator_state_dict"] = raw_discriminator.state_dict()
                 checkpoint["disc_optimizer_state_dict"] = disc_optimizer.state_dict()
 
             torch.save(checkpoint, checkpoint_dir / "best_model.pth")
