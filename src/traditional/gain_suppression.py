@@ -80,8 +80,10 @@ class GainSuppressionMethod(nn.Module):
         # 转换为线性域
         x_linear = torch.pow(10, x)
         
-        # 初始化状态
-        if self.gain_mask is None or self.gain_mask.shape[-1] != time_frames:
+        # 初始化状态（检查batch_size和time_frames是否匹配）
+        if (self.gain_mask is None or 
+            self.gain_mask.shape[0] != batch_size or
+            self.gain_mask.shape[-1] != time_frames):
             self.gain_mask = torch.ones(batch_size, freq_bins, time_frames, device=x.device)
             self.background_estimate = torch.zeros(batch_size, freq_bins, time_frames, device=x.device)
         
