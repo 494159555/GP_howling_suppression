@@ -35,7 +35,8 @@ from src.models.unet_v10_gan import AudioUNet5GAN
 try:
     from src.models.loss_functions import (
         SpectralLoss, SpectralConsistencyLoss,
-        MultiTaskLoss, AdversarialLoss
+        MultiTaskLoss, AdversarialLoss,
+        SISDRLoss, MultiResolutionSTFTLoss, CompositeLoss
     )
 except ImportError as e:
     print(f"⚠️ 警告: 无法导入部分损失函数模块 - {e}")
@@ -43,6 +44,9 @@ except ImportError as e:
     SpectralConsistencyLoss = None
     MultiTaskLoss = None
     AdversarialLoss = None
+    SISDRLoss = None
+    MultiResolutionSTFTLoss = None
+    CompositeLoss = None
 
 # 导入训练策略（可选）
 try:
@@ -356,6 +360,21 @@ def get_loss_function(loss_type: str, loss_weights: Optional[Dict] = None) -> nn
             print("⚠️ 警告: AdversarialLoss 不可用，使用L1损失")
             return nn.L1Loss()
         return AdversarialLoss()
+    elif loss_type == 'si_sdr':
+        if SISDRLoss is None:
+            print("⚠️ 警告: SISDRLoss 不可用，使用L1损失")
+            return nn.L1Loss()
+        return SISDRLoss()
+    elif loss_type == 'multi_resolution_stft':
+        if MultiResolutionSTFTLoss is None:
+            print("⚠️ 警告: MultiResolutionSTFTLoss 不可用，使用L1损失")
+            return nn.L1Loss()
+        return MultiResolutionSTFTLoss()
+    elif loss_type == 'composite':
+        if CompositeLoss is None:
+            print("⚠️ 警告: CompositeLoss 不可用，使用L1损失")
+            return nn.L1Loss()
+        return CompositeLoss(alpha=1.0, beta=0.5)
     else:
         # 默认使用L1损失
         return nn.L1Loss()

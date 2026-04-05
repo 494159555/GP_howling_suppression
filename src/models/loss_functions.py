@@ -6,7 +6,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchaudio
 
 
 class SpectralLoss(nn.Module):
@@ -125,121 +124,6 @@ class MultiTaskLoss(nn.Module):
         return total_loss, loss_dict
 
 
-class MultiResolutionSTFTLoss(nn.Module):
-    """多分辨率STFT损失
-
-    在多个FFT尺寸下计算频谱L1损失，捕获不同时间-频率分辨率下的细节
-    """
-
-    def __init__(self, fft_sizes=(512, 256, 128), hop_sizes=None, win_lengths=None):
-        super().__init__()
-        self.fft_sizes = fft_sizes
-        self.hop_sizes = hop_sizes or [fs // 4 for fs in fft_sizes]
-        self.win_lengths = win_lengths or list(fft_sizes)
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """计算多分辨率STFT损失
-
-        Args:
-            pred: 预测频谱 [B, 1, F, T] 或 [B, F, T]
-            target: 目标频谱 同形状
-        """
-        if pred.dim() == 4:
-            pred = pred.squeeze(1)
-            target = target.squeeze(1)
-
-        total_loss = 0.0
-        for n_fft, hop_len, win_len in zip(self.fft_sizes, self.hop_sizes, self.win_lengths):
-            # 频谱 -> 波形近似 (griffin-lim简化: 直接从STFT幅度逆变换)
-            # 直接在频谱域计算多分辨率损失
-            # 用不同分辨率重新分析：对频谱做下采样模拟不同分辨率
-            freq_bins = pred.shape[-2]
-            time_frames = pred.shape[-1]
-
-            # 模拟不同分辨率的频谱
-            scale_f = n_fft // 512
-            if scale_f > 1:
-                # 更高分辨率：插值
-                pred_rescaled = F.interpolate(pred.unsqueeze(1), scale_factor=(scale_f, 1),
-                                              mode='bilinear', align_corners=False).squeeze(1)
-                target_rescaled = F.interpolate(target.unsqueeze(1), scale_factor=(scale_f, 1),
-                                                mode='bilinear', align_corners=False).squeeze(1)
-            elif scale_f < 1:
-                # 更低分辨率：平均池化
-                pred_rescaled = F.avg_pool2d(pred.unsqueeze(1), kernel_size=(2, 1)).squeeze(1)
-                target_rescaled = F.avg_pool2d(target.unsqueeze(1), kernel_size=(2, 1)).squeeze(1)
-            else:
-                pred_rescaled = pred
-                target_rescaled = target
-
-            # 对数域L1损失
-            eps = 1e-8
-            pred_log = torch.log10(pred_rescaled + eps)
-            target_log = torch.log10(target_rescaled + eps)
-            total_loss += F.l1_loss(pred_log, target_log)
-
-        return total_loss / len(self.fft_sizes)
-
-
-class SISDRLoss(nn.Module):
-    """SI-SDR损失（尺度不变信噪比负值）
-
-    直接在频谱域计算SI-SDR
-    """
-
-    def __init__(self, eps: float = 1e-8):
-        super().__init__()
-        self.eps = eps
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """计算SI-SDR损失
-
-        Args:
-            pred: 预测 [B, 1, F, T] 或 [B, F, T]
-            target: 目标 同形状
-        """
-        # 展平为 [B, -1]
-        pred_flat = pred.reshape(pred.shape[0], -1)
-        target_flat = target.reshape(target.shape[0], -1)
-
-        # <target, pred> / ||target||^2 * target
-        dot = torch.sum(pred_flat * target_flat, dim=1, keepdim=True)
-        s_target = torch.sum(target_flat ** 2, dim=1, keepdim=True)
-        s_target = s_target + self.eps
-
-        scale = dot / s_target
-        scaled_target = scale * target_flat
-
-        # SI-SDR = 10 * log10(||scaled_target||^2 / ||noise||^2)
-        noise = pred_flat - scaled_target
-        si_sdr = 10 * torch.log10(
-            (torch.sum(scaled_target ** 2, dim=1) + self.eps) /
-            (torch.sum(noise ** 2, dim=1) + self.eps)
-        )
-
-        # 返回负值作为损失（越大越好 -> 越小损失越小）
-        return -torch.mean(si_sdr)
-
-
-class CompositeLoss(nn.Module):
-    """复合损失函数
-
-    Multi-Resolution STFT Loss (α=1.0) + SI-SDR Loss (β=0.5)
-    """
-
-    def __init__(self, alpha: float = 1.0, beta: float = 0.5):
-        super().__init__()
-        self.alpha = alpha
-        self.beta = beta
-        self.mrstft_loss = MultiResolutionSTFTLoss()
-        self.sisdr_loss = SISDRLoss()
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        mrstft = self.mrstft_loss(pred, target)
-        sisdr = self.sisdr_loss(pred, target)
-        return self.alpha * mrstft + self.beta * sisdr
-
-
 class Discriminator(nn.Module):
     """判别器
     
@@ -279,89 +163,83 @@ class Discriminator(nn.Module):
 
 
 class SISDRLoss(nn.Module):
-    """尺度不变信噪比损失 (SI-SDR Loss)
+    """SI-SDR损失（尺度不变信噪比）
 
-    基于频谱域的SI-SDR计算，负值作为损失（越小越好）
+    在频谱域计算SI-SDR的负值作为损失函数
+    SI-SDR = 10 * log10(||s_target||^2 / ||e_noise||^2)
+    loss = -SI-SDR
     """
 
-    def __init__(self, eps: float = 1e-8):
+    def __init__(self, epsilon: float = 1e-8):
         super(SISDRLoss, self).__init__()
-        self.eps = eps
+        self.epsilon = epsilon
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        # 将预测对齐到目标尺度
-        pred_flat = pred.reshape(pred.shape[0], -1)
-        target_flat = target.reshape(target.shape[0], -1)
+        # 展平除batch维外的所有维度
+        pred_flat = pred.flatten(start_dim=1)
+        target_flat = target.flatten(start_dim=1)
 
-        # s_target = (<target, pred> / ||target||^2) * target
+        # 计算目标标量投影
         dot = torch.sum(pred_flat * target_flat, dim=1, keepdim=True)
-        s_target_energy = torch.sum(target_flat ** 2, dim=1, keepdim=True) + self.eps
+        s_target_energy = torch.sum(target_flat ** 2, dim=1, keepdim=True) + self.epsilon
         s_target = (dot / s_target_energy) * target_flat
 
-        # e_noise = pred - s_target
+        # 计算噪声残差
         e_noise = pred_flat - s_target
 
-        # SI-SDR = 10 * log10(||s_target||^2 / ||e_noise||^2)
+        # SI-SDR
         si_sdr = 10 * torch.log10(
-            torch.sum(s_target ** 2, dim=1) / (torch.sum(e_noise ** 2, dim=1) + self.eps) + self.eps
+            torch.sum(s_target ** 2, dim=1) / (torch.sum(e_noise ** 2, dim=1) + self.epsilon) + self.epsilon
         )
 
-        # 返回负SI-SDR作为损失
         return -si_sdr.mean()
 
 
 class MultiResolutionSTFTLoss(nn.Module):
     """多分辨率STFT损失
 
-    在不同分辨率下计算频谱L1损失（帧长512/256/128）
-    由于数据已经是频谱域，通过不同粒度的池化模拟多分辨率
+    在不同频率分辨率下计算频谱L1损失
+    模拟不同FFT帧长（512/256/128）的频谱分析效果
     """
 
-    def __init__(self, eps: float = 1e-8):
+    def __init__(self, fft_sizes: list = None, epsilon: float = 1e-8):
         super(MultiResolutionSTFTLoss, self).__init__()
-        self.eps = eps
+        # 模拟不同FFT帧长对应的下采样因子
+        # fft=512 → 原始分辨率, fft=256 → 2x下采样, fft=128 → 4x下采样
+        self.downsample_factors = [1, 2, 4] if fft_sizes is None else \
+            [512 // fs for fs in fft_sizes]
+        self.epsilon = epsilon
 
-    def _compute_loss_at_scale(self, pred: torch.Tensor, target: torch.Tensor,
-                                freq_scale: int, time_scale: int) -> torch.Tensor:
-        """在指定缩放下计算L1损失"""
-        if freq_scale > 1 or time_scale > 1:
-            # 使用平均池化模拟不同分辨率
-            B, C, F, T = pred.shape
-            f_out = F // freq_scale
-            t_out = T // time_scale
-            if f_out > 0 and t_out > 0:
-                pred_scaled = nn.functional.avg_pool2d(pred, (freq_scale, time_scale))
-                target_scaled = nn.functional.avg_pool2d(target, (freq_scale, time_scale))
-            else:
-                pred_scaled = pred
-                target_scaled = target
-        else:
-            pred_scaled = pred
-            target_scaled = target
-        return nn.functional.l1_loss(pred_scaled, target_scaled)
+    def _downsample_spectrogram(self, spec: torch.Tensor, factor: int) -> torch.Tensor:
+        """对频谱图进行频率维度下采样，模拟更小的FFT帧长"""
+        if factor == 1:
+            return spec
+        freq_dim = spec.shape[-2]
+        # 截断到可整除的长度
+        trunc_len = (freq_dim // factor) * factor
+        spec_trunc = spec[..., :trunc_len, :]
+        # 重塑并取均值
+        new_shape = list(spec_trunc.shape)
+        new_shape[-2] = trunc_len // factor
+        new_shape.insert(-1, factor)
+        return spec_trunc.reshape(new_shape).mean(dim=-2)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        # 确保输入是4D: [B, C, F, T]
-        if pred.dim() == 3:
-            pred = pred.unsqueeze(1)
-            target = target.unsqueeze(1)
+        total_loss = 0.0
+        for factor in self.downsample_factors:
+            pred_down = self._downsample_spectrogram(pred, factor)
+            target_down = self._downsample_spectrogram(target, factor)
+            total_loss += F.l1_loss(pred_down, target_down)
 
-        # 原始分辨率
-        loss_full = self._compute_loss_at_scale(pred, target, 1, 1)
-        # 频率减半（模拟帧长256）
-        loss_half_f = self._compute_loss_at_scale(pred, target, 2, 1)
-        # 频率1/4（模拟帧长128）
-        loss_quarter_f = self._compute_loss_at_scale(pred, target, 4, 1)
-        # 时间减半
-        loss_half_t = self._compute_loss_at_scale(pred, target, 1, 2)
-
-        return loss_full + loss_half_f + loss_quarter_f + loss_half_t
+        return total_loss / len(self.downsample_factors)
 
 
 class CompositeLoss(nn.Module):
-    """组合损失 (Composite Loss)
+    """复合损失函数
 
-    多分辨率STFT损失(α=1.0) + SI-SDR损失(β=0.5)
+    组合多分辨率STFT损失和SI-SDR损失
+    Composite = α * MultiResolutionSTFT + β * SI-SDR
+    默认: α=1.0, β=0.5
     """
 
     def __init__(self, alpha: float = 1.0, beta: float = 0.5):
@@ -372,14 +250,14 @@ class CompositeLoss(nn.Module):
         self.sisdr_loss = SISDRLoss()
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        loss_mr = self.mrstft_loss(pred, target)
-        loss_si = self.sisdr_loss(pred, target)
-        return self.alpha * loss_mr + self.beta * loss_si
+        mrstft = self.mrstft_loss(pred, target)
+        sisdr = self.sisdr_loss(pred, target)
+        return self.alpha * mrstft + self.beta * sisdr
 
 
 class AdversarialLoss(nn.Module):
     """对抗损失
-    
+
     GAN训练的生成器和判别器损失
     """
     

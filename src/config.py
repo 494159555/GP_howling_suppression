@@ -67,6 +67,9 @@ class Config:
         'multitask': '多任务损失',
         'multitask_consistency': '多任务一致性损失',
         'adversarial': '对抗损失',
+        'si_sdr': 'SI-SDR损失',
+        'multi_resolution_stft': '多分辨率STFT损失',
+        'composite': '复合损失(MR-STFT+SI-SDR)',
     }
     
     DEFAULT_LOSS = 'multitask'
