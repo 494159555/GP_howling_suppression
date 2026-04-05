@@ -300,7 +300,7 @@ When using a public address system indoors, acoustic feedback can cause positive
 [12] Zhang S, Kong Y, Lv S, et al. FT-LSTM based complex network for joint acoustic echo cancellation and speech enhancement[J]. arXiv preprint arXiv:2106.07577, 2021.
 [13] Ronneberger O, Fischer P, Brox T. U-net: Convolutional networks for biomedical image segmentation[C]. MICCAI, 2015: 234-241.
 [14] Jansson A, Humphrey E, Montecchio N, et al. Singing voice separation with deep U-Net convolutional networks[C]. International Society for Music Information Retrieval Conference, 2017.
-[15] Cho Y, Kim H. Speech enhancement using U-Net with spectral magnitude approximation[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2022.
+[15] Choi H-S, Kim J-H, Huh J, et al. Phase-aware speech enhancement with deep complex U-Net[C]. International Conference on Learning Representations (ICLR), 2019.
 [16] Wang Y, Wang D L. A deep neural network for time-domain signal reconstruction[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2015: 4390-4394.
 [17] Tan K, Wang D L. A convolutional recurrent neural network for real-time speech enhancement[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2019.
 [18] Défossez A, Usunier N, Bottou L, et al. Demucs: Deep extractors for music sources[C]. International Society for Music Information Retrieval Conference, 2019.

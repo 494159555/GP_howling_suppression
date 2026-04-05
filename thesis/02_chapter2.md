@@ -86,7 +86,7 @@ U-Net最初是为二维图像分割任务设计的，其输入和输出均为二
 
 在图像分割领域，U-Net的目标是为图像的每个像素预测一个类别标签；而在音频频谱处理领域，U-Net的目标是为时频图的每个时频单元预测一个掩膜值（Mask Value），该掩膜值表示该时频单元中目标信号（干净语音）能量占总能量的比例。通过将预测的掩膜与带啸叫信号的时频表示相乘，即可实现目标信号的提取和啸叫分量的抑制。
 
-这一迁移应用已经在多个音频处理任务中取得了成功。Jansson等人使用U-Net架构从混合音乐频谱中分离出人声和伴奏[4]，验证了U-Net在音乐源分离任务中的有效性。Cho和Kim将U-Net应用于语音增强任务[5]，通过对频谱幅度进行掩膜估计来去除噪声干扰。这些研究工作充分证明了U-Net架构在音频频谱处理领域的适用性和优越性。
+这一迁移应用已经在多个音频处理任务中取得了成功。Jansson等人使用U-Net架构从混合音乐频谱中分离出人声和伴奏[4]，验证了U-Net在音乐源分离任务中的有效性。Choi等人提出了Deep Complex U-Net[5]，将U-Net扩展到复数域进行语音增强，通过同时估计幅度和相位掩膜来去除噪声干扰。这些研究工作充分证明了U-Net架构在音频频谱处理领域的适用性和优越性。
 
 在具体实现上，本研究对标准U-Net进行了适应音频信号特点的调整。由于音频时频图在时间维度和频率维度上的变化特性不同（频率维度具有明确的物理含义和周期性结构，而时间维度是顺序变化的），本研究在网络的下采样和上采样操作中采用了非对称的步长设置。具体而言，编码器中的卷积层使用步长$(2, 1)$，仅在频率维度上进行下采样，保持时间维度不变；相应地，解码器中的转置卷积也使用步长$(2, 1)$，仅在频率维度上进行上采样。这种设计避免了时间维度的信息损失，更适合处理时频域的音频信号。
 
@@ -268,7 +268,7 @@ U-Net网络的最后一层使用Sigmoid激活函数，确保输出的掩膜值�
 [2] Zhang H, Yu M, Yu D. Deep learning for joint acoustic echo and acoustic howling suppression in hybrid meetings[C]. IEEE Automatic Speech Recognition and Understanding Workshop (ASRU), 2023: 1-7.
 [3] Ronneberger O, Fischer P, Brox T. U-net: Convolutional networks for biomedical image segmentation[C]. International Conference on Medical Image Computing and Computer-Assisted Intervention (MICCAI), 2015: 234-241.
 [4] Jansson A, Humphrey E, Montecchio N, et al. Singing voice separation with deep U-Net convolutional networks[C]. International Society for Music Information Retrieval Conference, 2017.
-[5] Cho Y, Kim H. Speech enhancement using U-Net with spectral magnitude approximation[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2022.
+[5] Choi H-S, Kim J-H, Huh J, et al. Phase-aware speech enhancement with deep complex U-Net[C]. International Conference on Learning Representations (ICLR), 2019.
 [6] Oktay O, Schlemper J, Folgoc L L, et al. Attention U-Net: Learning where to look for the pancreas[C]. Medical Imaging with Deep Learning, 2018.
 [7] Hu J, Shen L, Sun G. Squeeze-and-excitation networks[C]. IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2018: 7132-7141.
 [8] He K, Zhang X, Ren S, et al. Deep residual learning for image recognition[C]. IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2016: 770-778.
