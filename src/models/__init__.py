@@ -18,6 +18,9 @@ from .loss_functions import (
     SpectralLoss,
     SpectralConsistencyLoss,
     MultiTaskLoss,
+    SISDRLoss,
+    MultiResolutionSTFTLoss,
+    CompositeLoss,
     AdversarialLoss,
     Discriminator,
 )
@@ -27,6 +30,13 @@ from .augmentation import (
     MixupAugmentation,
     AdversarialAugmentation,
     CombinedAugmentation,
+    FreqMaskAugmentation,
+    TimeMaskAugmentation,
+    JointMaskAugmentation,
+    GainScalingAugmentation,
+    NoiseInjectionAugmentation,
+    SpecMixup,
+    FullAugmentation,
 )
 from .training_strategies import (
     MixedPrecisionTrainer,
@@ -48,10 +58,14 @@ __all__ = [
     'AudioUNet5Optimized', 'AudioUNet5GAN',
     # 损失函数
     'SpectralLoss', 'SpectralConsistencyLoss', 'MultiTaskLoss',
+    'SISDRLoss', 'MultiResolutionSTFTLoss', 'CompositeLoss',
     'AdversarialLoss', 'Discriminator',
     # 数据增强
     'AudioAugmentation', 'SpecAugment', 'MixupAugmentation',
     'AdversarialAugmentation', 'CombinedAugmentation',
+    'FreqMaskAugmentation', 'TimeMaskAugmentation', 'JointMaskAugmentation',
+    'GainScalingAugmentation', 'NoiseInjectionAugmentation',
+    'SpecMixup', 'FullAugmentation',
     # 训练策略
     'MixedPrecisionTrainer', 'CosineAnnealingWarmupScheduler',
     'OneCycleScheduler', 'CurriculumLearning', 'create_lr_scheduler',

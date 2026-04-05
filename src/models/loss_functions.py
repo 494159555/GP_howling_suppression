@@ -162,6 +162,105 @@ class Discriminator(nn.Module):
         return output
 
 
+class SISDRLoss(nn.Module):
+    """尺度不变信噪比损失 (SI-SDR Loss)
+
+    基于频谱域的SI-SDR计算，负值作为损失（越小越好）
+    """
+
+    def __init__(self, eps: float = 1e-8):
+        super(SISDRLoss, self).__init__()
+        self.eps = eps
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # 将预测对齐到目标尺度
+        pred_flat = pred.reshape(pred.shape[0], -1)
+        target_flat = target.reshape(target.shape[0], -1)
+
+        # s_target = (<target, pred> / ||target||^2) * target
+        dot = torch.sum(pred_flat * target_flat, dim=1, keepdim=True)
+        s_target_energy = torch.sum(target_flat ** 2, dim=1, keepdim=True) + self.eps
+        s_target = (dot / s_target_energy) * target_flat
+
+        # e_noise = pred - s_target
+        e_noise = pred_flat - s_target
+
+        # SI-SDR = 10 * log10(||s_target||^2 / ||e_noise||^2)
+        si_sdr = 10 * torch.log10(
+            torch.sum(s_target ** 2, dim=1) / (torch.sum(e_noise ** 2, dim=1) + self.eps) + self.eps
+        )
+
+        # 返回负SI-SDR作为损失
+        return -si_sdr.mean()
+
+
+class MultiResolutionSTFTLoss(nn.Module):
+    """多分辨率STFT损失
+
+    在不同分辨率下计算频谱L1损失（帧长512/256/128）
+    由于数据已经是频谱域，通过不同粒度的池化模拟多分辨率
+    """
+
+    def __init__(self, eps: float = 1e-8):
+        super(MultiResolutionSTFTLoss, self).__init__()
+        self.eps = eps
+
+    def _compute_loss_at_scale(self, pred: torch.Tensor, target: torch.Tensor,
+                                freq_scale: int, time_scale: int) -> torch.Tensor:
+        """在指定缩放下计算L1损失"""
+        if freq_scale > 1 or time_scale > 1:
+            # 使用平均池化模拟不同分辨率
+            B, C, F, T = pred.shape
+            f_out = F // freq_scale
+            t_out = T // time_scale
+            if f_out > 0 and t_out > 0:
+                pred_scaled = nn.functional.avg_pool2d(pred, (freq_scale, time_scale))
+                target_scaled = nn.functional.avg_pool2d(target, (freq_scale, time_scale))
+            else:
+                pred_scaled = pred
+                target_scaled = target
+        else:
+            pred_scaled = pred
+            target_scaled = target
+        return nn.functional.l1_loss(pred_scaled, target_scaled)
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # 确保输入是4D: [B, C, F, T]
+        if pred.dim() == 3:
+            pred = pred.unsqueeze(1)
+            target = target.unsqueeze(1)
+
+        # 原始分辨率
+        loss_full = self._compute_loss_at_scale(pred, target, 1, 1)
+        # 频率减半（模拟帧长256）
+        loss_half_f = self._compute_loss_at_scale(pred, target, 2, 1)
+        # 频率1/4（模拟帧长128）
+        loss_quarter_f = self._compute_loss_at_scale(pred, target, 4, 1)
+        # 时间减半
+        loss_half_t = self._compute_loss_at_scale(pred, target, 1, 2)
+
+        return loss_full + loss_half_f + loss_quarter_f + loss_half_t
+
+
+class CompositeLoss(nn.Module):
+    """组合损失 (Composite Loss)
+
+    多分辨率STFT损失(α=1.0) + SI-SDR损失(β=0.5)
+    """
+
+    def __init__(self, alpha: float = 1.0, beta: float = 0.5):
+        super(CompositeLoss, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.mrstft_loss = MultiResolutionSTFTLoss()
+        self.sisdr_loss = SISDRLoss()
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        loss_mr = self.mrstft_loss(pred, target)
+        loss_si = self.sisdr_loss(pred, target)
+        return self.alpha * loss_mr + self.beta * loss_si
+
+
 class AdversarialLoss(nn.Module):
     """对抗损失
     

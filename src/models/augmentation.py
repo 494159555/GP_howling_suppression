@@ -178,6 +178,200 @@ class AdversarialAugmentation:
         return x_adv
 
 
+class FreqMaskAugmentation:
+    """频率掩蔽增强
+
+    仅对频谱图频率轴应用掩码
+    """
+
+    def __init__(self, max_width: int = 20, num_masks: int = 2, prob: float = 0.5):
+        self.max_width = max_width
+        self.num_masks = num_masks
+        self.prob = prob
+
+    def __call__(self, spectrogram):
+        spec = spectrogram.clone()
+        if spec.dim() == 3:
+            _, freq_bins, time_frames = spec.shape
+        else:
+            freq_bins, time_frames = spec.shape[-2], spec.shape[-1]
+
+        if random.random() < self.prob:
+            for _ in range(self.num_masks):
+                mask_width = random.randint(0, self.max_width)
+                mask_start = random.randint(0, max(0, freq_bins - mask_width))
+                if spec.dim() == 3:
+                    spec[:, mask_start:mask_start + mask_width, :] = 0.0
+                else:
+                    spec[..., mask_start:mask_start + mask_width, :] = 0.0
+        return spec
+
+
+class TimeMaskAugmentation:
+    """时间掩蔽增强
+
+    仅对频谱图时间轴应用掩码
+    """
+
+    def __init__(self, max_width: int = 20, num_masks: int = 2, prob: float = 0.5):
+        self.max_width = max_width
+        self.num_masks = num_masks
+        self.prob = prob
+
+    def __call__(self, spectrogram):
+        spec = spectrogram.clone()
+        if spec.dim() == 3:
+            _, freq_bins, time_frames = spec.shape
+        else:
+            freq_bins, time_frames = spec.shape[-2], spec.shape[-1]
+
+        if random.random() < self.prob:
+            for _ in range(self.num_masks):
+                mask_width = random.randint(0, self.max_width)
+                mask_start = random.randint(0, max(0, time_frames - mask_width))
+                if spec.dim() == 3:
+                    spec[:, :, mask_start:mask_start + mask_width] = 0.0
+                else:
+                    spec[..., :, mask_start:mask_start + mask_width] = 0.0
+        return spec
+
+
+class JointMaskAugmentation:
+    """联合掩蔽增强
+
+    同时应用频率掩蔽和时间掩蔽
+    """
+
+    def __init__(self, freq_max_width: int = 20, time_max_width: int = 20,
+                 num_freq_masks: int = 2, num_time_masks: int = 2, prob: float = 0.5):
+        self.freq_mask = FreqMaskAugmentation(max_width=freq_max_width,
+                                              num_masks=num_freq_masks, prob=prob)
+        self.time_mask = TimeMaskAugmentation(max_width=time_max_width,
+                                              num_masks=num_time_masks, prob=prob)
+
+    def __call__(self, spectrogram):
+        spec = self.freq_mask(spectrogram)
+        spec = self.time_mask(spec)
+        return spec
+
+
+class GainScalingAugmentation:
+    """增益缩放增强
+
+    对频谱图乘以随机增益因子
+    """
+
+    def __init__(self, min_gain: float = 0.8, max_gain: float = 1.2, prob: float = 0.5):
+        self.min_gain = min_gain
+        self.max_gain = max_gain
+        self.prob = prob
+
+    def __call__(self, spectrogram):
+        if random.random() < self.prob:
+            gain = random.uniform(self.min_gain, self.max_gain)
+            return spectrogram * gain
+        return spectrogram
+
+
+class NoiseInjectionAugmentation:
+    """噪声注入增强
+
+    向频谱图添加高斯噪声，模拟指定SNR范围
+    """
+
+    def __init__(self, min_snr_db: float = 20.0, max_snr_db: float = 40.0, prob: float = 0.5):
+        self.min_snr_db = min_snr_db
+        self.max_snr_db = max_snr_db
+        self.prob = prob
+
+    def __call__(self, spectrogram):
+        if random.random() < self.prob:
+            snr_db = random.uniform(self.min_snr_db, self.max_snr_db)
+            signal_power = torch.mean(spectrogram ** 2)
+            noise_power = signal_power / (10 ** (snr_db / 10))
+            noise = torch.randn_like(spectrogram) * torch.sqrt(noise_power)
+            return spectrogram + noise
+        return spectrogram
+
+
+class SpecMixup:
+    """频谱域Mixup增强
+
+    在batch内随机配对进行线性插值
+    """
+
+    def __init__(self, alpha: float = 0.4, prob: float = 0.5):
+        self.alpha = alpha
+        self.prob = prob
+
+    def __call__(self, x, y):
+        """对输入x和目标y应用Mixup
+
+        Args:
+            x: 输入频谱 [B, C, F, T]
+            y: 目标频谱 [B, C, F, T]
+        Returns:
+            mixed_x, mixed_y
+        """
+        if random.random() > self.prob:
+            return x, y
+
+        lam = np.random.beta(self.alpha, self.alpha)
+        lam = max(lam, 1 - lam)
+
+        batch_size = x.shape[0]
+        index = torch.randperm(batch_size, device=x.device)
+
+        mixed_x = lam * x + (1 - lam) * x[index]
+        mixed_y = lam * y + (1 - lam) * y[index]
+
+        return mixed_x, mixed_y
+
+
+class FullAugmentation:
+    """综合增强策略
+
+    联合掩蔽 + 增益缩放(0.8~1.2) + 噪声注入(SNR 20~40dB) + Mixup(α=0.4)
+    """
+
+    def __init__(self, use_mixup: bool = True):
+        self.joint_mask = JointMaskAugmentation(freq_max_width=20, time_max_width=20,
+                                                 num_freq_masks=2, num_time_masks=2)
+        self.gain_scaling = GainScalingAugmentation(min_gain=0.8, max_gain=1.2)
+        self.noise_injection = NoiseInjectionAugmentation(min_snr_db=20.0, max_snr_db=40.0)
+        self.mixup = SpecMixup(alpha=0.4) if use_mixup else None
+
+    def __call__(self, x, y=None):
+        """应用综合增强
+
+        Args:
+            x: 输入频谱 [B, C, F, T]
+            y: 目标频谱 [B, C, F, T]（Mixup需要）
+        Returns:
+            如果y不为None: (augmented_x, augmented_y)
+            否则: augmented_x
+        """
+        eps = 1e-8
+
+        # 1. 联合掩蔽
+        x = self.joint_mask(x)
+
+        # 2. 增益缩放（缩放后裁剪到[0,1]）
+        x = torch.clamp(self.gain_scaling(x), 0.0, 1.0)
+
+        # 3. 噪声注入（注入后裁剪到[eps,1]避免零值导致log NaN）
+        x = torch.clamp(self.noise_injection(x), eps, 1.0)
+
+        # 4. Mixup（需要目标数据）
+        if self.mixup is not None and y is not None:
+            x, y = self.mixup(x, y)
+            return x, y
+
+        if y is not None:
+            return x, y
+        return x
+
+
 class CombinedAugmentation:
     """组合增强流水线
     
