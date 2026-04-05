@@ -1,17 +1,21 @@
-"""实验6: 数据增强对比
+"""实验7: 数据增强对比（对应EXPERIMENTS.md阶段七）
 
-固定模型 AudioUNet5Optimized (V6)，Composite Loss + Warmup+CosineDecay，
-对比5种数据增强策略:
-1. 无增强（Baseline）
-2. 频率掩蔽（FreqMask）— 最大宽度20频率bin，2个掩码
-3. 时间掩蔽（TimeMask）— 最大宽度20时间帧，2个掩码
-4. 联合掩蔽（JointMask）— 频率 + 时间掩蔽同时应用
-5. 综合增强（Full Augmentation）— 联合掩蔽 + 增益缩放 + 噪声注入 + Mixup
+固定设置:
+  - 模型: AudioUNet5Optimized (unet_v6_optimized)
+  - 损失函数: Composite Loss (MultiTaskLoss: spectral=0.5, l1=0.3, mse=0.2)
+  - 学习率调度: Warmup + CosineDecay (5 epochs warmup, lr 1e-3 -> 1e-6)
+
+对比5种增强策略:
+  1. 无增强（Baseline）
+  2. 频率掩蔽（FreqMask）- 最大宽度20频率bin，2个掩码
+  3. 时间掩蔽（TimeMask）- 最大宽度20时间帧，2个掩码
+  4. 联合掩蔽（JointMask）- 频率 + 时间掩蔽同时应用
+  5. 综合增强（Full Augmentation）- 联合掩蔽 + 增益缩放(0.8~1.2) + 噪声注入(SNR 20~40dB) + Mixup(α=0.4)
 
 用法:
     python scripts/augmentation_comparison.py
-    python scripts/augmentation_comparison.py --epochs 100 --debug
-    python scripts/augmentation_comparison.py --model unet_v6_optimized
+    python scripts/augmentation_comparison.py --epochs 50 --debug
+    python scripts/augmentation_comparison.py --gpu 0
 """
 
 import argparse
@@ -31,31 +35,109 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.config import cfg
 from src.dataset import HowlingDataset
 from src.models import get_model
-from src.models.loss_functions import CompositeLoss
-from src.models.augmentation import (
-    FreqMaskAugmentation,
-    TimeMaskAugmentation,
-    JointMaskAugmentation,
-    FullAugmentation,
-)
+from src.models.loss_functions import MultiTaskLoss
+from src.models.augmentation import SpecAugment, MixupAugmentation
 from src.models.training_strategies import CosineAnnealingWarmupScheduler
 from src.evaluation.metrics import AudioMetrics, calculate_mos_score
 
 
-# 增强配置: (名称, 增强实例或None)
+# ============ 增强策略定义 ============
+
+class FreqMaskOnly:
+    """仅频率掩蔽 - 最大宽度20频率bin，2个掩码"""
+
+    def __init__(self):
+        self.aug = SpecAugment(
+            freq_mask_param=20, time_mask_param=0,
+            num_freq_masks=2, num_time_masks=0, prob=1.0
+        )
+
+    def __call__(self, x):
+        return self.aug(x)
+
+
+class TimeMaskOnly:
+    """仅时间掩蔽 - 最大宽度20时间帧，2个掩码"""
+
+    def __init__(self):
+        self.aug = SpecAugment(
+            freq_mask_param=0, time_mask_param=20,
+            num_freq_masks=0, num_time_masks=2, prob=1.0
+        )
+
+    def __call__(self, x):
+        return self.aug(x)
+
+
+class JointMask:
+    """联合掩蔽 - 频率 + 时间掩蔽同时应用"""
+
+    def __init__(self):
+        self.aug = SpecAugment(
+            freq_mask_param=20, time_mask_param=20,
+            num_freq_masks=2, num_time_masks=2, prob=1.0
+        )
+
+    def __call__(self, x):
+        return self.aug(x)
+
+
+class FullAugmentation:
+    """综合增强 - 联合掩蔽 + 增益缩放(0.8~1.2) + 噪声注入(SNR 20~40dB) + Mixup(α=0.4)"""
+
+    def __init__(self):
+        self.mask = JointMask()
+        self.mixup = MixupAugmentation(alpha=0.4, prob=0.5)
+
+    def _gain_scaling(self, x):
+        """增益缩放 0.8~1.2"""
+        import random
+        factor = random.uniform(0.8, 1.2)
+        return x * factor
+
+    def _noise_injection(self, x, snr_db_range=(20, 40)):
+        """噪声注入 SNR 20~40dB"""
+        import random
+        snr_db = random.uniform(*snr_db_range)
+        signal_power = torch.mean(x ** 2)
+        noise_power = signal_power / (10 ** (snr_db / 10))
+        noise = torch.randn_like(x) * torch.sqrt(noise_power)
+        return x + noise
+
+    def __call__(self, x, target=None, x2=None, target2=None):
+        """应用综合增强
+
+        Args:
+            x: 输入频谱
+            target: 目标频谱（可选）
+            x2: 第二个样本输入（Mixup用）
+            target2: 第二个样本目标（Mixup用）
+        """
+        # 1. 联合掩蔽
+        x = self.mask(x)
+        # 2. 增益缩放
+        x = self._gain_scaling(x)
+        # 3. 噪声注入
+        x = self._noise_injection(x)
+        # 4. Mixup（如果有第二个样本）
+        if x2 is not None and target is not None and target2 is not None:
+            x, target, _, _ = self.mixup(x, target, x2, target2)
+            return x, target
+        return x
+
+
 def build_augmentation_configs():
+    """构建5种增强策略配置"""
     return [
-        ('无增强(Baseline)', None),
-        ('频率掩蔽(FreqMask)', FreqMaskAugmentation(max_width=20, num_masks=2)),
-        ('时间掩蔽(TimeMask)', TimeMaskAugmentation(max_width=20, num_masks=2)),
-        ('联合掩蔽(JointMask)', JointMaskAugmentation(freq_max_width=20, time_max_width=20,
-                                                       num_freq_masks=2, num_time_masks=2)),
-        ('综合增强(Full)', FullAugmentation(use_mixup=True)),
+        ('None(基线)', None),
+        ('FreqMask', FreqMaskOnly()),
+        ('TimeMask', TimeMaskOnly()),
+        ('JointMask', JointMask()),
+        ('FullAugmentation', FullAugmentation()),
     ]
 
 
-AUGMENTATION_NAMES = ['无增强(Baseline)', '频率掩蔽(FreqMask)', '时间掩蔽(TimeMask)',
-                       '联合掩蔽(JointMask)', '综合增强(Full)']
+AUGMENTATION_NAMES = ['None(基线)', 'FreqMask', 'TimeMask', 'JointMask', 'FullAugmentation']
 
 
 def train_and_evaluate(aug_name, augmenter, model_name, train_loader, val_loader,
@@ -74,19 +156,17 @@ def train_and_evaluate(aug_name, augmenter, model_name, train_loader, val_loader
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  参数量: {param_count:,}")
 
-    # Composite Loss: Multi-Resolution STFT(α=1.0) + SI-SDR(β=0.5)
-    criterion = CompositeLoss(alpha=1.0, beta=0.5)
-
-    # Adam优化器
+    # Composite Loss (MultiTaskLoss)
+    criterion = MultiTaskLoss(weights={'spectral': 0.5, 'l1': 0.3, 'mse': 0.2})
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
-    # Warmup + CosineDecay调度器
+    # Warmup + CosineDecay 学习率调度器
     scheduler = CosineAnnealingWarmupScheduler(
-        optimizer=optimizer,
+        optimizer,
         warmup_epochs=5,
         total_epochs=args.epochs,
         base_lr=args.lr,
-        min_lr=1e-6,
+        min_lr=1e-6
     )
 
     num_epochs = args.epochs
@@ -94,61 +174,101 @@ def train_and_evaluate(aug_name, augmenter, model_name, train_loader, val_loader
     train_losses, val_losses = [], []
     start_time = time.time()
 
-    # 判断增强类型是否需要 (x, y) 对（Mixup类）
-    needs_pair = isinstance(augmenter, FullAugmentation)
+    # 用于Mixup的额外数据迭代器
+    use_full_aug = (aug_name == 'FullAugmentation')
 
     for epoch in range(num_epochs):
-        # 更新学习率
-        scheduler.step(epoch)
-
         # 训练
         model.train()
         epoch_loss = 0.0
-        for noisy, clean in train_loader:
-            noisy, clean = noisy.to(device), clean.to(device)
+        num_batches = 0
 
-            # 应用数据增强
-            if augmenter is not None:
-                with torch.no_grad():
+        # 如果是FullAugmentation，需要两个dataloader同步迭代
+        if use_full_aug:
+            train_iter = iter(train_loader)
+            train_iter2 = iter(train_loader)
+
+            for i, (noisy, clean) in enumerate(train_loader):
+                noisy, clean = noisy.to(device), clean.to(device)
+
+                # 应用综合增强（含Mixup）
+                try:
+                    # 获取第二组样本
                     try:
-                        if needs_pair:
-                            noisy, clean = augmenter(noisy, clean)
-                        else:
+                        noisy2, clean2 = next(train_iter2)
+                    except StopIteration:
+                        train_iter2 = iter(train_loader)
+                        noisy2, clean2 = next(train_iter2)
+                    noisy2, clean2 = noisy2.to(device), clean2.to(device)
+
+                    result = augmenter(noisy, clean, noisy2, clean2)
+                    if isinstance(result, tuple) and len(result) == 2:
+                        noisy, clean = result[0], result[1]
+                    else:
+                        noisy = result
+                except Exception:
+                    pass
+
+                optimizer.zero_grad()
+                pred = model(noisy)
+                loss, _ = criterion(pred, clean)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                epoch_loss += loss.item()
+                num_batches += 1
+        else:
+            for noisy, clean in train_loader:
+                noisy, clean = noisy.to(device), clean.to(device)
+
+                # 应用数据增强
+                if augmenter is not None:
+                    with torch.no_grad():
+                        try:
                             augmented = augmenter(noisy)
-                            noisy = augmented
-                    except Exception as e:
-                        pass  # 增强失败则使用原始数据
+                            if isinstance(augmented, tuple):
+                                noisy = augmented[0]
+                            else:
+                                noisy = augmented
+                        except Exception:
+                            pass
 
-            optimizer.zero_grad()
-            pred = model(noisy)
-            loss = criterion(pred, clean)
-            loss.backward()
-            # 梯度裁剪
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            epoch_loss += loss.item()
+                optimizer.zero_grad()
+                pred = model(noisy)
+                loss, _ = criterion(pred, clean)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                epoch_loss += loss.item()
+                num_batches += 1
 
-        train_loss = epoch_loss / len(train_loader)
+        train_loss = epoch_loss / num_batches
         train_losses.append(train_loss)
 
         # 验证（不使用增强）
         model.eval()
         val_loss = 0.0
+        val_batches = 0
         with torch.no_grad():
             for noisy, clean in val_loader:
                 noisy, clean = noisy.to(device), clean.to(device)
                 pred = model(noisy)
-                val_loss += criterion(pred, clean).item()
-        val_loss /= len(val_loader)
+                vloss, _ = criterion(pred, clean)
+                val_loss += vloss.item()
+                val_batches += 1
+        val_loss /= val_batches
         val_losses.append(val_loss)
+
+        # 更新学习率
+        scheduler.step()
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
-            lr = optimizer.param_groups[0]['lr']
+            current_lr = optimizer.param_groups[0]['lr']
             print(f"    Epoch [{epoch+1:3d}/{num_epochs}] "
-                  f"Train: {train_loss:.4f} | Val: {val_loss:.4f} | LR: {lr:.6f}")
+                  f"Train: {train_loss:.6f} | Val: {val_loss:.6f} | LR: {current_lr:.2e}")
 
     elapsed = time.time() - start_time
 
@@ -174,16 +294,14 @@ def train_and_evaluate(aug_name, augmenter, model_name, train_loader, val_loader
     results = {
         'augmentation': aug_name,
         'model': model_name,
+        'loss_function': 'CompositeLoss(spectral=0.5,l1=0.3,mse=0.2)',
+        'lr_scheduler': 'WarmupCosineDecay(warmup=5,lr=1e-3->1e-6)',
         'param_count': param_count,
         'best_val_loss': best_val_loss,
         'avg_l1_loss': float(np.mean(final_losses)),
         'train_losses': train_losses,
         'val_losses': val_losses,
         'training_time_seconds': elapsed,
-        'epochs': num_epochs,
-        'learning_rate': args.lr,
-        'scheduler': 'Warmup+CosineDecay',
-        'loss_function': 'CompositeLoss(MR-STFT+SI-SDR)',
     }
     for k, v in eval_metrics.items():
         results[k] = float(np.mean(v)) if v else 0.0
@@ -199,15 +317,16 @@ def train_and_evaluate(aug_name, augmenter, model_name, train_loader, val_loader
 
 
 def main():
-    parser = argparse.ArgumentParser(description='实验6: 数据增强对比')
+    parser = argparse.ArgumentParser(description='实验7: 数据增强对比')
     parser.add_argument('--model', type=str, default='unet_v6_optimized',
                         choices=list(cfg.AVAILABLE_MODELS.keys()),
-                        help='统一使用的模型 (默认: unet_v6_optimized)')
-    parser.add_argument('--epochs', type=int, default=100, help='训练轮数')
+                        help='统一使用的模型（默认: unet_v6_optimized）')
+    parser.add_argument('--epochs', type=int, default=50, help='训练轮数')
     parser.add_argument('--batch-size', type=int, default=16, help='批大小')
     parser.add_argument('--lr', type=float, default=1e-3, help='初始学习率')
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
-    parser.add_argument('--output-dir', type=str, default='experiments/exp6_augmentation',
+    parser.add_argument('--gpu', type=int, default=0, help='使用的GPU编号')
+    parser.add_argument('--output-dir', type=str, default='experiments/exp7_augmentation',
                         help='输出目录')
     parser.add_argument('--debug', action='store_true', help='调试模式（3 epochs）')
     parser.add_argument('--augs', nargs='+', default=None,
@@ -218,19 +337,18 @@ def main():
     if args.debug:
         args.epochs = 3
 
-    device = cfg.DEVICE
+    device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
     print(f"设备: {device}, 模型: {args.model}")
-    print(f"损失函数: CompositeLoss(MR-STFT α=1.0 + SI-SDR β=0.5)")
-    print(f"调度器: Warmup(5 epochs) + CosineDecay")
-    print(f"学习率: {args.lr}")
+    print(f"损失函数: CompositeLoss (spectral=0.5, l1=0.3, mse=0.2)")
+    print(f"学习率调度: Warmup+CosineDecay (warmup=5, lr={args.lr}->1e-6)")
 
     print("\n加载数据集...")
     train_dataset = HowlingDataset(cfg.TRAIN_CLEAN_DIR, cfg.TRAIN_NOISY_DIR)
     val_dataset = HowlingDataset(cfg.VAL_CLEAN_DIR, cfg.VAL_NOISY_DIR)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
-                              shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
-                            shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
+                              num_workers=4, pin_memory=True, drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
+                            num_workers=4, pin_memory=True)
     print(f"训练: {len(train_dataset)}, 验证: {len(val_dataset)}")
 
     output_dir = PROJECT_ROOT / args.output_dir
@@ -247,8 +365,7 @@ def main():
 
     all_results = []
     for name, augmenter in configs:
-        result = train_and_evaluate(name, augmenter, args.model, train_loader,
-                                    val_loader, device, args)
+        result = train_and_evaluate(name, augmenter, args.model, train_loader, val_loader, device, args)
         all_results.append(result)
 
     # 保存详细结果
@@ -256,44 +373,38 @@ def main():
     with open(results_path, 'w', encoding='utf-8') as f:
         json.dump(all_results, f, indent=4, ensure_ascii=False, default=str)
 
-    # 生成对比表格（表5-7）
+    # 生成对比表格
     print(f"\n{'='*100}")
-    print("  表5-7 数据增强对比结果")
+    print("  表5-7: 数据增强对比结果")
+    print(f"  模型: AudioUNet5Optimized (V6) | 损失: Composite Loss | 调度: Warmup+CosineDecay")
     print(f"{'='*100}")
-    print(f"{'增强策略':25s} | {'Best Val':>10s} | {'L1 Loss':>8s} | "
-          f"{'SNR(dB)':>8s} | {'PSNR(dB)':>8s} | {'STOI':>7s} | "
-          f"{'MOS':>5s} | {'Howling↓dB':>10s} | {'耗时(s)':>8s}")
+    print(f"{'增强策略':20s} | {'Best Val':>10s} | {'L1 Loss':>8s} | {'SNR(dB)':>8s} | "
+          f"{'STOI':>7s} | {'Howling(dB)':>12s} | {'MOS':>5s} | {'耗时':>8s}")
     print("-" * 100)
     for r in sorted(all_results, key=lambda x: x['mos_estimate'], reverse=True):
-        print(f"{r['augmentation']:25s} | {r['best_val_loss']:10.4f} | "
+        print(f"{r['augmentation']:20s} | {r['best_val_loss']:10.4f} | "
               f"{r['avg_l1_loss']:8.4f} | {r['snr_improvement_db']:8.2f} | "
-              f"{r['psnr_db']:8.2f} | {r['stoi_score']:7.4f} | "
-              f"{r['mos_estimate']:5.2f} | {r['howling_reduction_db']:10.2f} | "
+              f"{r['stoi_score']:7.4f} | {r['howling_reduction_db']:12.2f} | "
+              f"{r['mos_estimate']:5.2f} | "
               f"{r['training_time_seconds']:7.1f}s")
 
-    # 保存LaTeX格式表格
-    latex_path = output_dir / 'table_5_7_latex.txt'
-    with open(latex_path, 'w', encoding='utf-8') as f:
-        f.write("\\begin{table}[htbp]\n")
-        f.write("\\centering\n")
-        f.write("\\caption{数据增强策略对比结果}\n")
-        f.write("\\label{tab:augmentation_comparison}\n")
-        f.write("\\begin{tabular}{lcccccc}\n")
-        f.write("\\toprule\n")
-        f.write("增强策略 & L1 Loss & SNR (dB) & PSNR (dB) & STOI & MOS & 耗时 (s) \\\\\n")
-        f.write("\\midrule\n")
+    # 保存Markdown格式表格
+    md_path = output_dir / 'table_5_7_augmentation_comparison.md'
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write("# 表5-7: 数据增强对比结果\n\n")
+        f.write(f"**模型**: AudioUNet5Optimized (V6)  \n")
+        f.write(f"**损失函数**: Composite Loss (spectral=0.5, l1=0.3, mse=0.2)  \n")
+        f.write(f"**学习率调度**: Warmup + CosineDecay (warmup=5 epochs, lr=1e-3 → 1e-6)  \n\n")
+        f.write(f"| 增强策略 | Best Val Loss | L1 Loss | SNR改善(dB) | STOI | 啸叫抑制(dB) | MOS | 训练耗时(s) |\n")
+        f.write(f"|:---|---:|---:|---:|---:|---:|---:|---:|\n")
         for r in sorted(all_results, key=lambda x: x['mos_estimate'], reverse=True):
-            f.write(f"{r['augmentation']} & {r['avg_l1_loss']:.4f} & "
-                    f"{r['snr_improvement_db']:.2f} & {r['psnr_db']:.2f} & "
-                    f"{r['stoi_score']:.4f} & {r['mos_estimate']:.2f} & "
-                    f"{r['training_time_seconds']:.1f} \\\\\n")
-        f.write("\\bottomrule\n")
-        f.write("\\end{tabular}\n")
-        f.write("\\end{table}\n")
-
+            f.write(f"| {r['augmentation']} | {r['best_val_loss']:.4f} | "
+                    f"{r['avg_l1_loss']:.4f} | {r['snr_improvement_db']:.2f} | "
+                    f"{r['stoi_score']:.4f} | {r['howling_reduction_db']:.2f} | "
+                    f"{r['mos_estimate']:.2f} | {r['training_time_seconds']:.1f} |\n")
     print(f"\n结果已保存:")
     print(f"  JSON: {results_path}")
-    print(f"  LaTeX: {latex_path}")
+    print(f"  表格: {md_path}")
 
 
 if __name__ == '__main__':
