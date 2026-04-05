@@ -224,4 +224,4 @@ $$L_{Composite} = \alpha \cdot L_{MR\text{-}STFT} + \beta \cdot L_{SI\text{-}SDR
 
 [5] Loshchilov I, Hutter F. SGDR: Stochastic gradient descent with warm restarts[C]. International Conference on Learning Representations (ICLR), 2017.
 
-[6] Smith L N. A disciplined approach to neural network hyper-parameters: Part 1 — learning rate, batch size, momentum, and weight decay[J]. arXiv preprint arXiv:1803.09820, 2018.
+[6] Smith L N. A disciplined approach to neural network hyper-parameters: Part 1 — learning rate, batch size, momentum, and weight decay[EB/OL]. arXiv preprint arXiv:1803.09820, 2018.
