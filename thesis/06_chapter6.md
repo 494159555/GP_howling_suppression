@@ -46,14 +46,14 @@
 
 [3] Ronneberger O, Fischer P, Brox T. U-net: Convolutional networks for biomedical image segmentation[C]. International Conference on Medical Image Computing and Computer-Assisted Intervention (MICCAI), 2015: 234-241.
 
-[4] Défossez A, Usunier N, Bottou L, et al. Demucs: Deep extractors for music sources[C]. International Society for Music Information Retrieval Conference, 2019.
+[4] Défossez A, Usunier N, Bottou L, et al. Music source separation in the waveform domain[J]. arXiv preprint arXiv:1911.13254, 2019.
 
-[5] Luo Y, Mesgarani N. Conv-TasNet: Surpassing ideal time-frequency magnitude masking for speech separation[J]. IEEE/ACM Transactions on Audio, Speech, and Language Processing, 2019, 27(10): 1495-1508.
+[5] Luo Y, Mesgarani N. Conv-TasNet: Surpassing ideal time-frequency magnitude masking for speech separation[J]. IEEE/ACM Transactions on Audio, Speech, and Language Processing, 2019, 27(8): 1256-1266.
 
 [6] Oktay O, Schlemper J, Folgoc L L, et al. Attention U-Net: Learning where to look for the pancreas[C]. Medical Imaging with Deep Learning, 2018.
 
 [7] He K, Zhang X, Ren S, et al. Deep residual learning for image recognition[C]. IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2016: 770-778.
 
-[8] Chen L C, Papandreou G, Schroff F, et al. Rethinking atrous convolution for semantic image segmentation[J]. arXiv preprint arXiv:1706.05587, 2017.
+[8] Chen L C, Papandreou G, Schroff F, et al. Rethinking atrous convolution for semantic image segmentation[EB/OL]. arXiv preprint arXiv:1706.05587, 2017.
 
-[9] Goodfellow I, Pouget-Abadie J, Mirza M, et al. Generative adversarial nets[C]. Advances in Neural Information Processing Systems (NeurIPS), 2014.
+[9] Goodfellow I, Pouget-Abadie J, Mirza M, et al. Generative adversarial nets[C]. Advances in Neural Information Processing Systems (NeurIPS), 2014: 2672-2680.
