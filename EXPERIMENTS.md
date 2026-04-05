@@ -121,7 +121,7 @@
 
 ---
 
-## 阶段六：训练策略对比（实验5）
+## 阶段六：训练策略对比（实验5）（已完成）
 
 固定模型为 AudioUNet5Optimized (V6)，损失函数为 Composite Loss，对比学习率调度策略：
 
@@ -133,14 +133,15 @@
 | 4 | OneCycleLR | 前30%升至1e-3，后70%退火至1e-6 |
 | 5 | Warmup + CosineDecay | 前5轮线性预热至1e-3，后余弦衰减至1e-6 |
 
-- [ ] CosineAnnealingLR 训练 + 评估
-- [ ] ReduceLROnPlateau 训练 + 评估
-- [ ] CyclicLR 训练 + 评估
-- [ ] OneCycleLR 训练 + 评估
-- [ ] Warmup + CosineDecay 训练 + 评估
-- [ ] 汇总5组结果，生成训练策略对比表（表5-6）
+- [x] CosineAnnealingLR 训练 + 评估
+- [x] ReduceLROnPlateau 训练 + 评估
+- [x] CyclicLR 训练 + 评估
+- [x] OneCycleLR 训练 + 评估
+- [x] Warmup + CosineDecay 训练 + 评估
+- [x] 汇总5组结果，生成训练策略对比表（表5-6）
 
-**对比脚本**: `scripts/training_strategy_comparison.py`
+**对比脚本**: `scripts/exp5_training_strategy.py`
+**结果目录**: `experiments/exp5_training_strategy/`
 
 ---
 
