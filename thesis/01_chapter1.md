@@ -42,9 +42,9 @@
 
 近年来，深度学习技术的飞速发展为音频信号处理领域带来了革命性的变化，在多个子领域取得了超越传统方法的成果。以下从与本课题密切相关的几个方向进行综述。
 
-**语音增强**是深度学习在音频处理中最早取得突破性进展的领域之一。语音增强的目标是从带噪语音中去除噪声干扰，恢复干净的语音信号。早期的研究主要采用基于频域掩膜的方法，如Wang和Chen等人提出的基于深度神经网络（DNN）的语音增强方法[16]，通过学习带噪语音时频表示到理想掩膜（Ideal Binary/Ratio Mask）的映射来实现噪声抑制。随后，卷积神经网络（CNN）和循环神经网络（RNN）等更强大的网络架构被引入，如Tan和Wang提出的基于卷积循环网络（CRN）的语音增强系统[17]，在保持较低计算复杂度的同时取得了优异的增强效果。近年来，以Demucs[18]、FullSubNet[19]等为代表的端到端时域和时频域联合处理模型进一步推动了语音增强技术的发展。这些研究成果表明，深度学习方法能够从数据中自动学习复杂的噪声模式，并有效地将语音信号与噪声分离，在客观评价指标和主观听觉质量上均显著优于传统的谱减法、维纳滤波等方法。
+**语音增强**是深度学习在音频处理中最早取得突破性进展的领域之一。语音增强的目标是从带噪语音中去除噪声干扰，恢复干净的语音信号。早期的研究主要采用基于频域掩膜的方法，如Wang和Wang提出的基于深度神经网络（DNN）的语音增强方法[16]，通过学习带噪语音时频表示到理想掩膜（Ideal Binary/Ratio Mask）的映射来实现噪声抑制。随后，卷积神经网络（CNN）和循环神经网络（RNN）等更强大的网络架构被引入，如Tan和Wang提出的基于卷积循环网络（CRN）的语音增强系统[17]，在保持较低计算复杂度的同时取得了优异的增强效果。近年来，以Demucs[18]、FullSubNet[19]等为代表的端到端时域和时频域联合处理模型进一步推动了语音增强技术的发展。这些研究成果表明，深度学习方法能够从数据中自动学习复杂的噪声模式，并有效地将语音信号与噪声分离，在客观评价指标和主观听觉质量上均显著优于传统的谱减法、维纳滤波等方法。
 
-**语音分离**技术与语音增强有着密切的关联，其目标是从多个说话人的混合语音中分离出各个独立的说话人信号。深度聚类（Deep Clustering）[20]、排列不变训练（PIT）[21]和时域分离网络（TasNet）[22]等方法的提出极大地推动了该领域的发展。语音分离任务与啸叫抑制任务在形式上具有相似性：两者都是从混合信号中提取目标信号。不同的是，语音分离中需要分离的是多个说话人的语音，而啸叫抑制中需要分离的是目标语音和声反馈引起的啸叫分量。正是这种任务形式上的相似性，使得语音分离领域的许多技术方案可以迁移到啸叫抑制问题中。
+**语音分离**技术与语音增强有着密切的关联，其目标是从多个说话人的混合语音中分离出各个独立的说话人信号。深度聚类（Deep Clustering）[20]、排列不变训练（PIT）[21]和时域分离网络（Conv-TasNet）[22]等方法的提出极大地推动了该领域的发展。语音分离任务与啸叫抑制任务在形式上具有相似性：两者都是从混合信号中提取目标信号。不同的是，语音分离中需要分离的是多个说话人的语音，而啸叫抑制中需要分离的是目标语音和声反馈引起的啸叫分量。正是这种任务形式上的相似性，使得语音分离领域的许多技术方案可以迁移到啸叫抑制问题中。
 
 **U-Net在音频频谱处理中的应用**是本课题的重要技术背景。U-Net最初由Ronneberger等人于2015年为生物医学图像分割任务而提出[13]，其编码器-解码器结构配合跳跃连接的设计在需要精确定位的像素级预测任务中表现出色。由于音频信号的时频表示（如STFT幅度谱）在数据结构上与二维图像类似，研究者们自然地将U-Net架构迁移到了音频处理领域。在音乐源分离任务中，Jansson等人使用U-Net架构从混合音乐频谱中分离出人声和伴奏[14]，取得了优异的效果。在语音增强领域，以U-Net为骨干网络的多种变体也被广泛研究和应用[15]。此外，针对U-Net的改进方案不断涌现，如在跳跃连接中引入注意力机制[23]使网络自动聚焦于关键特征区域，在编码器中引入残差连接[24]缓解深层网络的梯度消失问题，以及在瓶颈层使用空洞卷积[25]扩大感受野以捕获更丰富的上下文信息。这些改进技术的提出为构建更强大的音频处理模型提供了丰富的技术储备。
 
@@ -89,23 +89,23 @@
 [3] 赵明. 啸叫检测与抑制扩声系统设计[D]. 西北大学, 2018.
 [4] 王凤森. 扩声系统中啸叫抑制算法的研究[D]. 五邑大学, 2020.
 [5] Berdahl E, Harris D. Frequency shifting for acoustic howling suppression[C]. Proceedings of the 13th International Conference on Digital Audio Effects, Graz, Austria, 2010.
-[6] Loetwassana W, Punchalard R, Lorsawatsiri A, et al. Adaptive howling suppressor in an audio amplifier system[C]. Asia-Pacific Conference on Communications, IEEE, 2007: 445-448.
+[6] Loctwassana W, Punchalard R, Lorsawatsiri A, et al. Adaptive howling suppressor in an audio amplifier system[C]. Asia-Pacific Conference on Communications, IEEE, 2007: 445-448.
 [7] van Waterschoot T, Moonen M. Comparative evaluation of howling detection criteria in notch-filter-based howling suppression[J]. Journal of the Audio Engineering Society, 2010, 58(11): 923-940.
 [8] 甘华国. 基于深度学习的音频啸叫处理方法研究[D]. 广州大学, 2021.
 [9] Wang G, Liu Q, Wang W. Adaptive feedback cancellation with prediction error method and howling suppression in train public address system[J]. Signal Processing, 2020, 167: 107279.
 [10] LeCun Y, Bengio Y, Hinton G. Deep learning[J]. Nature, 2015, 521(7553): 436-444.
 [11] Zhang H, Tan K, Wang D L. Deep learning for joint acoustic echo and noise cancellation with nonlinear distortions[C]. INTERSPEECH, 2019: 4255-4259.
-[12] Zhang S, Kong Y, Lv S, et al. FT-LSTM based complex network for joint acoustic echo cancellation and speech enhancement[J]. arXiv preprint arXiv:2106.07577, 2021.
+[12] Zhang S, Kong Y, Lv S, et al. F-T-LSTM based complex network for joint acoustic echo cancellation and speech enhancement[C]. INTERSPEECH, 2021.
 [13] Ronneberger O, Fischer P, Brox T. U-net: Convolutional networks for biomedical image segmentation[C]. MICCAI, 2015: 234-241.
 [14] Jansson A, Humphrey E, Montecchio N, et al. Singing voice separation with deep U-Net convolutional networks[C]. International Society for Music Information Retrieval Conference, 2017.
 [15] Choi H-S, Kim J-H, Huh J, et al. Phase-aware speech enhancement with deep complex U-Net[C]. International Conference on Learning Representations (ICLR), 2019.
 [16] Wang Y, Wang D L. A deep neural network for time-domain signal reconstruction[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2015: 4390-4394.
-[17] Tan K, Wang D L. A convolutional recurrent neural network for real-time speech enhancement[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2019.
-[18] Défossez A, Usunier N, Bottou L, et al. Demucs: Deep extractors for music sources[C]. International Society for Music Information Retrieval Conference, 2019.
+[17] Tan K, Wang D L. A convolutional recurrent neural network for real-time speech enhancement[C]. INTERSPEECH, 2018: 3229-3233.
+[18] Défossez A, Usunier N, Bottou L, et al. Music source separation in the waveform domain[C]. International Society for Music Information Retrieval Conference, 2019.
 [19] Hao X, Su X, Horaud R, et al. FullSubNet: A full-band and sub-band fusion model for real-time single-channel speech enhancement[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2021.
 [20] Hershey J R, Chen Z, Le Roux J, et al. Deep clustering: Discriminative embeddings for segmentation and separation[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2016.
 [21] Yu D, Kolbaek M, Tan Z H, et al. Permutation invariant training of deep models for speaker-independent multi-talker speech separation[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2017.
-[22] Luo Y, Mesgarani N. TasNet: Surpassing ideal time-frequency magnitude masking for speech separation[J]. IEEE/ACM Transactions on Audio, Speech, and Language Processing, 2019, 27(10): 1495-1508.
+[22] Luo Y, Mesgarani N. Conv-TasNet: Surpassing ideal time-frequency magnitude masking for speech separation[J]. IEEE/ACM Transactions on Audio, Speech, and Language Processing, 2019, 27(8): 1256-1266.
 [23] Oktay O, Schlemper J, Folgoc L L, et al. Attention U-Net: Learning where to look for the pancreas[C]. Medical Imaging with Deep Learning, 2018.
 [24] He K, Zhang X, Ren S, et al. Deep residual learning for image recognition[C]. IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2016: 770-778.
 [25] Chen L C, Papandreou G, Schroff F, et al. Rethinking atrous convolution for semantic image segmentation[J]. arXiv preprint arXiv:1706.05587, 2017.
