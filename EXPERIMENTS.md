@@ -8,18 +8,18 @@
 ## 阶段一：数据准备
 
 ### 1.1 基于 RIR 的啸叫仿真数据生成 （已完成）
-- [ ] 配置 RIR 生成器参数（图像法）
+- [x] 配置 RIR 生成器参数（图像法）
   - 房间尺寸：随机生成
   - 混响时间 RT60：0.1s ~ 0.5s 随机
   - 麦克风/扬声器位置：随机
-- [ ] 配置系统参数
+- [x] 配置系统参数
   - 系统延迟 Δt：0.02s ~ 0.2s 随机
   - 增益 G：5dB ~ 10dB 随机
-- [ ] 实现非线性失真模拟（硬限幅 + Sigmoid）
-- [ ] 实现逐帧声反馈仿真流程（增益 → 非线性 → RIR卷积 → 叠加）
-- [ ] 生成干净语音-带啸叫语音配对数据集
-- [ ] 划分训练集、验证集、测试集（测试集 RIR 参数独立于训练集）
-- [ ] 验证数据质量（抽样检查频谱、试听）
+- [x] 实现非线性失真模拟（硬限幅 + Sigmoid）
+- [x] 实现逐帧声反馈仿真流程（增益 → 非线性 → RIR卷积 → 叠加）
+- [x] 生成干净语音-带啸叫语音配对数据集
+- [x] 划分训练集、验证集、测试集（测试集 RIR 参数独立于训练集）
+- [x] 验证数据质量（抽样检查频谱、试听）
 
 **关键文件**: `src/dataset.py`, 数据路径: `/mnt/ent_disk0/syx/howling_data/train|dev`
 **STFT 参数**: FFT=512, Hop=128/256, Hamming窗, 采样率 16kHz
@@ -38,20 +38,20 @@
 | V6 | AudioUNet5Optimized | ~6.2M | V3 + 残差连接 + 空洞卷积(ASPP) | `configs/unet_v6_optimized.yaml` |
 | V10 | AudioUNet5GAN | ~5.1M(生成器) | V2 + GAN对抗训练(LSGAN) | `configs/unet_v10_gan.yaml` |
 
-- [ ] V1: AudioUNet3 训练
-- [ ] V2: AudioUNet5 训练
-- [ ] V3: AudioUNet5Attention 训练
-- [ ] V6: AudioUNet5Optimized 训练
-- [ ] V10: AudioUNet5GAN 训练（含生成器+判别器交替训练）
+- [x] V1: AudioUNet3 训练
+- [x] V2: AudioUNet5 训练
+- [x] V3: AudioUNet5Attention 训练
+- [x] V6: AudioUNet5Optimized 训练
+- [x] V10: AudioUNet5GAN 训练（含生成器+判别器交替训练）
 
 **统一训练参数**: batch_size=16, lr=1e-3, epochs=100, early_stopping=15, Adam优化器, AMP混合精度, 梯度裁剪=1.0, weight_decay=1e-5
 **训练脚本**: `src/train.py` 或 `src/train_v2.py`
 
 ### 2.2 运行传统基线方法
 
-- [ ] 移频法（FrequencyShiftMethod）— 频偏 20Hz，STFT域线性插值
-- [ ] 增益抑制法（GainSuppressionMethod）— 频率范围 1kHz-8kHz，阈值 -30dB，衰减 -20dB
-- [ ] 自适应反馈消除法（AdaptiveFeedbackMethod）— NLMS算法，滤波器长度64，步长0.01
+- [x] 移频法（FrequencyShiftMethod）— 频偏 20Hz，STFT域线性插值
+- [x] 增益抑制法（GainSuppressionMethod）— 频率范围 1kHz-8kHz，阈值 -30dB，衰减 -20dB
+- [x] 自适应反馈消除法（AdaptiveFeedbackMethod）— NLMS算法，滤波器长度64，步长0.01
 
 **实现文件**: `src/traditional/frequency_shift.py`, `gain_suppression.py`, `adaptive_feedback.py`
 
@@ -59,15 +59,15 @@
 
 ## 阶段三：统一评估（实验2）
 
-- [ ] 在测试集上对所有方法统一推理
+- [x] 在测试集上对所有方法统一推理
   - 5个深度学习模型 + 3个传统方法 + 未处理基线
-- [ ] 计算客观评价指标
+- [x] 计算客观评价指标
   - SI-SDR（尺度不变信噪比）
   - PESQ（语音质量感知评估，0.5~4.5）
   - STOI（短时客观可懂度，0~1）
-- [ ] 记录推理时间（ms/条）
-- [ ] 统计模型参数量
-- [ ] 生成对比表格（表5-2 传统方法、表5-3 深度学习模型）
+- [x] 记录推理时间（ms/条）
+- [x] 统计模型参数量
+- [x] 生成对比表格（表5-2 传统方法、表5-3 深度学习模型）
 
 **评估脚本**: `scripts/evaluate_all.py`, `src/evaluate.py`
 **指标实现**: `src/evaluation/metrics.py`
@@ -110,12 +110,12 @@
 | 4 | Multi-Resolution STFT Loss | 多分辨率(帧长512/256/128)频谱L1损失 |
 | 5 | Composite Loss | 多分辨率STFT(α=1.0) + SI-SDR(β=0.5) |
 
-- [ ] MSE Loss 训练 + 评估
-- [ ] L1 Loss 训练 + 评估
-- [ ] SI-SDR Loss 训练 + 评估
-- [ ] Multi-Resolution STFT Loss 训练 + 评估
-- [ ] Composite Loss 训练 + 评估
-- [ ] 汇总5组结果，生成损失函数对比表（表5-5）
+- [x] MSE Loss 训练 + 评估
+- [x] L1 Loss 训练 + 评估
+- [x] SI-SDR Loss 训练 + 评估
+- [x] Multi-Resolution STFT Loss 训练 + 评估
+- [x] Composite Loss 训练 + 评估
+- [x] 汇总5组结果，生成损失函数对比表（表5-5）
 
 **对比脚本**: `scripts/loss_comparison.py`
 
@@ -157,12 +157,12 @@
 | 4 | 联合掩蔽（JointMask） | 频率 + 时间掩蔽同时应用 |
 | 5 | 综合增强（Full Augmentation） | 联合掩蔽 + 增益缩放(0.8~1.2) + 噪声注入(SNR 20~40dB) + Mixup(α=0.4) |
 
-- [ ] 无增强训练 + 评估
-- [ ] 频率掩蔽训练 + 评估
-- [ ] 时间掩蔽训练 + 评估
-- [ ] 联合掩蔽训练 + 评估
-- [ ] 综合增强训练 + 评估
-- [ ] 汇总5组结果，生成数据增强对比表（表5-7）
+- [x] 无增强训练 + 评估
+- [x] 频率掩蔽训练 + 评估
+- [x] 时间掩蔽训练 + 评估
+- [x] 联合掩蔽训练 + 评估
+- [x] 综合增强训练 + 评估
+- [x] 汇总5组结果，生成数据增强对比表（表5-7）
 
 **对比脚本**: `scripts/augmentation_comparison.py`
 **增强实现**: `src/models/augmentation.py`
