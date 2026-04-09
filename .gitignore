@@ -24,6 +24,7 @@ wheels/
 venv/
 ENV/
 env/
+.conda/
 
 # IDEs
 .vscode/
@@ -36,8 +37,7 @@ env/
 .ipynb_checkpoints
 
 # Data and models
-data/raw/
-data/processed/
+data/
 checkpoints/
 *.pth
 *.pkl
@@ -48,15 +48,14 @@ logs/
 *.log
 tensorboard/
 
-# Claude Code
-.claude/
+# Experiments output
+experiments/
+runs/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Experiments
-experiments/
-runs/
-data/
-
+# Claude Code / AI tools
+.claude/
+.cline/
