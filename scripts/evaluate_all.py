@@ -82,23 +82,62 @@ def load_model_from_checkpoint(model_name, checkpoint_path, device):
     return model
 
 
+def _istft_from_mag_phase(mag_norm, noisy_stft_complex, n_fft, hop_length, norm_min=-11.5, norm_max=2.5):
+    """从归一化幅度谱和带噪相位还原时域波形"""
+    mag_log = mag_norm * (norm_max - norm_min) + norm_min
+    mag_linear = 10 ** mag_log
+    
+    phase = torch.angle(noisy_stft_complex)
+    batch_size = mag_norm.shape[0]
+    freq_bins = mag_norm.shape[2]
+    time_frames = mag_norm.shape[3]
+    
+    if phase.dim() == 3:
+        phase = phase[:, :freq_bins, :time_frames]
+    else:
+        phase = phase[:freq_bins, :time_frames]
+    
+    mag_flat = mag_linear.squeeze(1)
+    enhanced_stft = mag_flat * torch.exp(1j * phase)
+    last_bin = torch.zeros(batch_size, 1, time_frames, dtype=enhanced_stft.dtype, device=enhanced_stft.device)
+    enhanced_stft_full = torch.cat([enhanced_stft, last_bin], dim=1)
+    
+    waveform = torch.istft(enhanced_stft_full, n_fft=n_fft, hop_length=hop_length, length=int(16000 * 3.0))
+    return waveform
+
+
 def evaluate_model(model, model_name, dataloader, device):
     """评估单个深度学习模型"""
+    from src.evaluate import _istft_from_mag_phase as _istft
+    
     metrics_calc = AudioMetrics(sample_rate=cfg.SAMPLE_RATE)
 
     all_metrics = {
         'snr_improvement_db': [],
         'psnr_db': [],
+        'si_sdr_db': [],
         'stoi_score': [],
+        'pesq_score': [],
         'howling_reduction_db': [],
         'spectral_smoothness_improvement': [],
         'high_frequency_reduction': [],
     }
     losses = []
     inference_times = []
+    
+    # 检测是否返回波形数据
+    sample_batch = next(iter(dataloader))
+    has_waveform = len(sample_batch) >= 5
+    del sample_batch
 
     with torch.no_grad():
-        for noisy_mag, clean_mag in dataloader:
+        for batch in dataloader:
+            if has_waveform:
+                noisy_mag, clean_mag, noisy_wave, clean_wave, noisy_stft = batch
+            else:
+                noisy_mag, clean_mag = batch
+                noisy_wave = clean_wave = noisy_stft = None
+            
             noisy_mag = noisy_mag.to(device)
             clean_mag = clean_mag.to(device)
 
@@ -112,12 +151,28 @@ def evaluate_model(model, model_name, dataloader, device):
             loss = torch.nn.L1Loss()(pred_mag, clean_mag)
             losses.append(loss.item())
 
-            # 综合指标
-            sample_metrics = metrics_calc.calculate_all_metrics(
-                clean=pred_mag,
-                noisy=noisy_mag,
-                enhanced=pred_mag,
-            )
+            # 综合指标（时域评估）
+            if has_waveform and noisy_stft is not None:
+                try:
+                    enhanced_wave = _istft(pred_mag.cpu(), noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
+                    noisy_wave_td = _istft(noisy_mag.cpu(), noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
+                    sample_metrics = metrics_calc.calculate_all_metrics(
+                        clean=clean_wave,
+                        noisy=noisy_wave_td,
+                        enhanced=enhanced_wave,
+                    )
+                except Exception:
+                    sample_metrics = metrics_calc.calculate_all_metrics(
+                        clean=clean_mag,
+                        noisy=noisy_mag,
+                        enhanced=pred_mag,
+                    )
+            else:
+                sample_metrics = metrics_calc.calculate_all_metrics(
+                    clean=clean_mag,
+                    noisy=noisy_mag,
+                    enhanced=pred_mag,
+                )
             for key in all_metrics:
                 if key in sample_metrics:
                     all_metrics[key].append(sample_metrics[key])
@@ -168,7 +223,13 @@ def evaluate_traditional_methods(dataloader, device):
         inference_times = []
 
         with torch.no_grad():
-            for noisy_mag, clean_mag in dataloader:
+            for batch in dataloader:
+                if len(batch) >= 5:
+                    noisy_mag, clean_mag, noisy_wave, clean_wave, noisy_stft = batch
+                else:
+                    noisy_mag, clean_mag = batch
+                    noisy_wave = clean_wave = noisy_stft = None
+                
                 noisy_mag = noisy_mag.to(device)
                 clean_mag = clean_mag.to(device)
 
@@ -181,8 +242,9 @@ def evaluate_traditional_methods(dataloader, device):
                     loss = torch.nn.L1Loss()(pred_mag, clean_mag)
                     method_losses.append(loss.item())
 
+                    # 修复：使用clean_mag作为参考，pred_mag作为增强输出
                     sample_metrics = metrics_calc.calculate_all_metrics(
-                        clean=pred_mag, noisy=noisy_mag, enhanced=pred_mag,
+                        clean=clean_mag, noisy=noisy_mag, enhanced=pred_mag,
                     )
                     for key in method_metrics:
                         if key in sample_metrics:

@@ -10,9 +10,11 @@
 import argparse
 import os
 import json
+import warnings
 from pathlib import Path
 from typing import Dict, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -111,13 +113,72 @@ def evaluate_basic(model, dataloader, criterion, device) -> float:
     return total_loss / len(dataloader)
 
 
-def evaluate_with_metrics(model, dataloader, device) -> Dict[str, float]:
-    """综合评估：计算所有指标
+def _istft_from_mag_phase(mag_norm, noisy_stft_complex, n_fft, hop_length, norm_min=-11.5, norm_max=2.5):
+    """从归一化幅度谱和带噪相位还原时域波形
+    
+    Args:
+        mag_norm: 归一化后的幅度谱 [B, 1, freq_bins, T]
+        noisy_stft_complex: 带噪信号的复数STFT [B, freq_bins+1, T] 或 [freq_bins+1, T]
+        n_fft: FFT大小
+        hop_length: 跳跃长度
+        norm_min: 归一化最小值
+        norm_max: 归一化最大值
+    
+    Returns:
+        时域波形 tensor
+    """
+    eps = 1e-8
+    # 反归一化
+    mag_log = mag_norm * (norm_max - norm_min) + norm_min
+    # 反对数
+    mag_linear = 10 ** mag_log
+    # mag_linear 是幅度谱的平方根，所以需要平方得到能量谱
+    # 但实际上我们直接需要幅度，所以 mag_linear 就是幅度
+    
+    # 获取相位（从noisy_stft_complex）
+    if noisy_stft_complex.dim() == 3:
+        # [B, freq_bins+1, T] -> 扩展维度匹配
+        phase = torch.angle(noisy_stft_complex)
+    else:
+        phase = torch.angle(noisy_stft_complex)
+    
+    # 确保维度匹配：mag_norm 是 [B, 1, 256, T], phase 可能是 [B, 257, T]
+    batch_size = mag_norm.shape[0]
+    freq_bins = mag_norm.shape[2]  # 256
+    time_frames = mag_norm.shape[3]
+    
+    # 取前256个频率bin的相位
+    if phase.dim() == 3:
+        phase = phase[:, :freq_bins, :time_frames]  # [B, 256, T]
+    else:
+        phase = phase[:freq_bins, :time_frames]  # [256, T]
+    
+    # 去掉channel维度
+    mag_flat = mag_linear.squeeze(1)  # [B, 256, T]
+    
+    # 构造复数STFT [B, 256, T]
+    enhanced_stft = mag_flat * torch.exp(1j * phase)
+    
+    # 需要补回第257个频率bin（共轭对称），用0填充
+    last_bin = torch.zeros(batch_size, 1, time_frames, 
+                           dtype=enhanced_stft.dtype, device=enhanced_stft.device)
+    enhanced_stft_full = torch.cat([enhanced_stft, last_bin], dim=1)  # [B, 257, T]
+    
+    # iSTFT还原
+    waveform = torch.istft(enhanced_stft_full, n_fft=n_fft, hop_length=hop_length, 
+                           length=int(16000 * 3.0))  # chunk_size
+    
+    return waveform
+
+
+def evaluate_with_metrics(model, dataloader, device, use_timedomain=True) -> Dict[str, float]:
+    """综合评估：计算所有指标（含时域指标STOI/PESQ/SI-SDR）
 
     Args:
         model: 模型
-        dataloader: 数据加载器
+        dataloader: 数据加载器（需使用 return_waveform=True 的数据集）
         device: 设备
+        use_timedomain: 是否使用时域评估（STOI/PESQ需要时域信号）
 
     Returns:
         评估指标字典
@@ -129,27 +190,69 @@ def evaluate_with_metrics(model, dataloader, device) -> Dict[str, float]:
     all_metrics = {
         'snr_improvement_db': [],
         'psnr_db': [],
+        'si_sdr_db': [],
         'stoi_score': [],
+        'pesq_score': [],
         'howling_reduction_db': [],
         'spectral_smoothness_improvement': [],
         'high_frequency_reduction': [],
     }
 
     losses = []
+    
+    # 检测dataloader是否返回波形数据（5个元素 vs 2个元素）
+    sample_batch = next(iter(dataloader))
+    has_waveform = len(sample_batch) >= 5
+    del sample_batch
 
     with torch.no_grad():
-        for noisy_mag, clean_mag in dataloader:
+        for batch in dataloader:
+            if has_waveform:
+                noisy_mag, clean_mag, noisy_wave, clean_wave, noisy_stft = batch
+            else:
+                noisy_mag, clean_mag = batch
+                noisy_wave = clean_wave = noisy_stft = None
+            
             noisy_mag = noisy_mag.to(device)
             clean_mag = clean_mag.to(device)
 
             pred_mag = model(noisy_mag)
 
-            # 计算综合指标
-            sample_metrics = metrics_calc.calculate_all_metrics(
-                clean=pred_mag,
-                noisy=noisy_mag,
-                enhanced=pred_mag,
-            )
+            if use_timedomain and has_waveform:
+                # ★ 时域评估：通过iSTFT还原波形，计算STOI/PESQ/SI-SDR
+                try:
+                    # 还原增强后的时域波形
+                    enhanced_wave = _istft_from_mag_phase(
+                        pred_mag.cpu(), noisy_stft, 
+                        n_fft=cfg.N_FFT, hop_length=cfg.HOP_LENGTH
+                    )
+                    noisy_wave_td = _istft_from_mag_phase(
+                        noisy_mag.cpu(), noisy_stft,
+                        n_fft=cfg.N_FFT, hop_length=cfg.HOP_LENGTH
+                    )
+                    clean_wave_td = clean_wave  # 直接使用原始干净波形
+                    
+                    # 在时域信号上计算所有指标
+                    sample_metrics = metrics_calc.calculate_all_metrics(
+                        clean=clean_wave_td,
+                        noisy=noisy_wave_td,
+                        enhanced=enhanced_wave,
+                    )
+                except Exception as e:
+                    # 时域评估失败时回退到频域评估
+                    warnings.warn(f"时域评估失败，回退到频域评估: {e}")
+                    sample_metrics = metrics_calc.calculate_all_metrics(
+                        clean=clean_mag,
+                        noisy=noisy_mag,
+                        enhanced=pred_mag,
+                    )
+            else:
+                # 频域评估（无波形数据时的回退方案）
+                sample_metrics = metrics_calc.calculate_all_metrics(
+                    clean=clean_mag,
+                    noisy=noisy_mag,
+                    enhanced=pred_mag,
+                )
 
             for key in all_metrics:
                 if key in sample_metrics:
@@ -201,6 +304,11 @@ def evaluate_traditional_methods(dataloader, device) -> Dict[str, Dict[str, floa
     }
 
     all_results = {}
+    
+    # 检测dataloader是否返回波形数据
+    sample_batch = next(iter(dataloader))
+    has_waveform = len(sample_batch) >= 5
+    del sample_batch
 
     for method_name, method in methods.items():
         method = method.to(device)
@@ -210,14 +318,22 @@ def evaluate_traditional_methods(dataloader, device) -> Dict[str, Dict[str, floa
         method_metrics = {
             'snr_improvement_db': [],
             'psnr_db': [],
+            'si_sdr_db': [],
             'stoi_score': [],
+            'pesq_score': [],
             'howling_reduction_db': [],
         }
 
         print(f"  评估传统方法: {method_name}...")
 
         with torch.no_grad():
-            for noisy_mag, clean_mag in dataloader:
+            for batch in dataloader:
+                if has_waveform:
+                    noisy_mag, clean_mag, noisy_wave, clean_wave, noisy_stft = batch
+                else:
+                    noisy_mag, clean_mag = batch
+                    noisy_wave = clean_wave = noisy_stft = None
+                
                 noisy_mag = noisy_mag.to(device)
                 clean_mag = clean_mag.to(device)
 
@@ -228,12 +344,35 @@ def evaluate_traditional_methods(dataloader, device) -> Dict[str, Dict[str, floa
                     loss = nn.L1Loss()(pred_mag, clean_mag)
                     method_losses.append(loss.item())
 
-                    # 综合指标
-                    sample_metrics = metrics_calc.calculate_all_metrics(
-                        clean=pred_mag,
-                        noisy=noisy_mag,
-                        enhanced=pred_mag,
-                    )
+                    if has_waveform and noisy_stft is not None:
+                        # 时域评估
+                        try:
+                            enhanced_wave = _istft_from_mag_phase(
+                                pred_mag.cpu(), noisy_stft,
+                                n_fft=cfg.N_FFT, hop_length=cfg.HOP_LENGTH
+                            )
+                            noisy_wave_td = _istft_from_mag_phase(
+                                noisy_mag.cpu(), noisy_stft,
+                                n_fft=cfg.N_FFT, hop_length=cfg.HOP_LENGTH
+                            )
+                            sample_metrics = metrics_calc.calculate_all_metrics(
+                                clean=clean_wave,
+                                noisy=noisy_wave_td,
+                                enhanced=enhanced_wave,
+                            )
+                        except Exception:
+                            sample_metrics = metrics_calc.calculate_all_metrics(
+                                clean=clean_mag,
+                                noisy=noisy_mag,
+                                enhanced=pred_mag,
+                            )
+                    else:
+                        # 频域评估（回退方案）
+                        sample_metrics = metrics_calc.calculate_all_metrics(
+                            clean=clean_mag,
+                            noisy=noisy_mag,
+                            enhanced=pred_mag,
+                        )
 
                     for key in method_metrics:
                         if key in sample_metrics:
@@ -391,18 +530,32 @@ def evaluate_model(
     print(f"模型: {model.__class__.__name__}")
     print(f"平均频谱损失: {avg_loss:.4f}")
 
-    # 4. 综合指标
+    # 4. 综合指标（使用带波形的数据集用于时域评估）
     if full_metrics:
-        print("\n正在计算综合指标...")
-        metrics = evaluate_with_metrics(model, val_loader, device)
+        print("\n正在计算综合指标（含时域指标SI-SDR/PESQ/STOI）...")
+        # 创建带波形返回的数据集用于时域评估
+        val_dataset_td = HowlingDataset(
+            clean_dir=cfg.VAL_CLEAN_DIR,
+            howling_dir=cfg.VAL_NOISY_DIR,
+            sample_rate=cfg.SAMPLE_RATE,
+            chunk_len=cfg.CHUNK_LEN,
+            n_fft=cfg.N_FFT,
+            return_waveform=True,
+        )
+        val_loader_td = DataLoader(
+            val_dataset_td, batch_size=batch_size, shuffle=False, num_workers=cfg.NUM_WORKERS
+        )
+        metrics = evaluate_with_metrics(model, val_loader_td, device)
         results.update(metrics)
 
         print("\n" + "-" * 50)
         print("综合评估指标")
         print("-" * 50)
         print(f"  SNR改善: {metrics.get('snr_improvement_db', 0):.2f} dB")
-        print(f"  PSNR: {metrics.get('psnr_db', 0):.2f} dB")
+        print(f"  SI-SDR: {metrics.get('si_sdr_db', 0):.2f} dB")
+        print(f"  PESQ: {metrics.get('pesq_score', 0):.2f}")
         print(f"  STOI: {metrics.get('stoi_score', 0):.4f}")
+        print(f"  PSNR: {metrics.get('psnr_db', 0):.2f} dB")
         print(f"  啸叫抑制: {metrics.get('howling_reduction_db', 0):.2f} dB")
         print(f"  MOS估算: {metrics.get('mos_estimate', 0):.2f}")
 

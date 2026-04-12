@@ -2,17 +2,18 @@
 Audio Quality Metrics Module
 
 This module implements various audio quality evaluation metrics including
-objective metrics (SNR, PSNR, STOI, PESQ), howling suppression specific metrics,
+objective metrics (SNR, PSNR, STOI, PESQ, SI-SDR), howling suppression specific metrics,
 and computational efficiency metrics.
 
 Author: Research Team
 Date: 2026-3-23
-Version: 2.0.0
+Version: 3.0.0
 """
 
 # Standard library imports
 import os
 import time
+import warnings
 from typing import Dict, List, Tuple, Optional
 
 # Third-party imports
@@ -29,7 +30,7 @@ class AudioMetrics:
     """Audio quality metrics calculator.
     
     This class provides comprehensive audio quality evaluation metrics including
-    objective metrics (SNR, PSNR, STOI), howling suppression specific metrics,
+    objective metrics (SNR, PSNR, STOI, PESQ, SI-SDR), howling suppression specific metrics,
     and computational efficiency metrics.
     
     Attributes:
@@ -109,33 +110,133 @@ class AudioMetrics:
     def calculate_stoi(self, clean: torch.Tensor, enhanced: torch.Tensor) -> float:
         """Calculate short-time objective intelligibility (STOI).
         
-        Simplified STOI calculation using correlation. For production use,
-        consider using the pystoi library for more accurate results.
+        Uses the pystoi library for accurate STOI calculation.
+        Requires time-domain waveforms as input.
+        
+        Args:
+            clean (torch.Tensor): Clean audio reference (time-domain waveform)
+            enhanced (torch.Tensor): Enhanced/processed audio (time-domain waveform)
+            
+        Returns:
+            float: STOI score between 0 and 1
+        """
+        from pystoi import stoi as stoi_func
+        
+        clean_np = clean.detach().cpu().numpy()
+        enhanced_np = enhanced.detach().cpu().numpy()
+        
+        # 展平为1D
+        if clean_np.ndim > 1:
+            clean_np = clean_np.flatten()
+            enhanced_np = enhanced_np.flatten()
+        
+        # 确保长度一致
+        min_len = min(len(clean_np), len(enhanced_np))
+        clean_np = clean_np[:min_len]
+        enhanced_np = enhanced_np[:min_len]
+        
+        # STOI要求信号长度至少为256个采样点
+        if len(clean_np) < 256:
+            return 0.0
+        
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                stoi_score = float(stoi_func(clean_np, enhanced_np, self.sample_rate, extended=False))
+            return max(0.0, min(1.0, stoi_score))
+        except Exception as e:
+            # 如果pystoi计算失败，回退到相关系数近似
+            correlation = np.corrcoef(clean_np, enhanced_np)[0, 1]
+            if np.isnan(correlation):
+                return 0.0
+            return float(max(0.0, min(1.0, (correlation + 1) / 2)))
+    
+    def calculate_si_sdr(self, clean: torch.Tensor, enhanced: torch.Tensor) -> float:
+        """Calculate Scale-Invariant Signal-to-Distortion Ratio (SI-SDR).
+        
+        SI-SDR is a standard metric for speech enhancement evaluation.
+        Can work with both time-domain and frequency-domain inputs.
         
         Args:
             clean (torch.Tensor): Clean audio reference
             enhanced (torch.Tensor): Enhanced/processed audio
             
         Returns:
-            float: STOI score between 0 and 1
+            float: SI-SDR value in decibels (dB)
         """
-        # 简化的STOI计算
-        # 实际建议使用: from pystoi import stoi
+        # 展平为1D以便计算
+        clean_flat = clean.flatten()
+        enhanced_flat = enhanced.flatten()
         
-        clean_np = clean.detach().cpu().numpy()
-        enhanced_np = enhanced.detach().cpu().numpy()
+        # 确保长度一致
+        min_len = min(len(clean_flat), len(enhanced_flat))
+        clean_flat = clean_flat[:min_len]
+        enhanced_flat = enhanced_flat[:min_len]
         
-        # 计算相关性作为简化指标
-        if clean_np.ndim > 1:
-            clean_np = clean_np.flatten()
-            enhanced_np = enhanced_np.flatten()
+        # 零均值化
+        clean_flat = clean_flat - torch.mean(clean_flat)
+        enhanced_flat = enhanced_flat - torch.mean(enhanced_flat)
+        
+        # 最优缩放投影
+        s_target = (torch.sum(enhanced_flat * clean_flat) / 
+                    (torch.sum(clean_flat * clean_flat) + self.eps)) * clean_flat
+        
+        # 失真分量
+        e_noise = enhanced_flat - s_target
+        
+        # SI-SDR
+        si_sdr = 10 * torch.log10(
+            torch.sum(s_target ** 2) / 
+            (torch.sum(e_noise ** 2) + self.eps)
+        )
+        
+        result = si_sdr
+        return result.item() if hasattr(result, 'item') else float(result)
+    
+    def calculate_pesq(self, clean: torch.Tensor, enhanced: torch.Tensor) -> float:
+        """Calculate Perceptual Evaluation of Speech Quality (PESQ).
+        
+        Uses the pesq library. Requires time-domain waveforms as input.
+        Only supports 8000Hz (narrowband) and 16000Hz (wideband) sample rates.
+        
+        Args:
+            clean (torch.Tensor): Clean audio reference (time-domain waveform)
+            enhanced (torch.Tensor): Enhanced/processed audio (time-domain waveform)
             
-        correlation = np.corrcoef(clean_np, enhanced_np)[0, 1]
+        Returns:
+            float: PESQ score between -0.5 and 4.5
+        """
+        from pesq import pesq as pesq_func
         
-        # 确保在0-1范围内
-        stoi_score = max(0, min(1, (correlation + 1) / 2))
+        clean_np = clean.detach().cpu().numpy().flatten()
+        enhanced_np = enhanced.detach().cpu().numpy().flatten()
         
-        return float(stoi_score)
+        # 确保长度一致
+        min_len = min(len(clean_np), len(enhanced_np))
+        clean_np = clean_np[:min_len]
+        enhanced_np = enhanced_np[:min_len]
+        
+        # 确保在[-1, 1]范围内（归一化）
+        max_abs = max(np.abs(clean_np).max(), np.abs(enhanced_np).max(), 1e-8)
+        if max_abs > 1.0:
+            clean_np = clean_np / max_abs
+            enhanced_np = enhanced_np / max_abs
+        
+        # PESQ要求信号长度至少为8秒（8000采样点@16kHz或更长）
+        min_samples = int(self.sample_rate * 0.25)  # 至少0.25秒
+        if len(clean_np) < min_samples:
+            return 1.0  # 返回最低分
+        
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # 选择模式：宽带(wb)用于16kHz，窄带(nb)用于8kHz
+                mode = 'wb' if self.sample_rate >= 16000 else 'nb'
+                pesq_score = float(pesq_func(self.sample_rate, clean_np, enhanced_np, mode))
+            return pesq_score
+        except Exception as e:
+            # PESQ计算失败时返回默认值
+            return 1.0
     
     def calculate_howling_reduction(self, noisy: torch.Tensor, enhanced: torch.Tensor,
                                   freq_bins: List[int] = None) -> Dict[str, float]:
@@ -260,8 +361,12 @@ class AudioMetrics:
                             processing_func=None, **kwargs) -> Dict[str, float]:
         """Calculate all evaluation metrics comprehensively.
         
-        Computes audio quality metrics, howling suppression metrics, and
-        computational efficiency metrics in one call.
+        Computes audio quality metrics (SI-SDR, PESQ, STOI, SNR), howling suppression 
+        metrics, and computational efficiency metrics in one call.
+        
+        Note: STOI and PESQ require time-domain waveforms. If frequency-domain 
+        spectrograms are passed, SI-SDR and SNR will still be computed but 
+        STOI/PESQ may be less accurate.
         
         Args:
             clean (torch.Tensor): Clean audio reference
@@ -280,7 +385,9 @@ class AudioMetrics:
         # 音频质量指标
         metrics['snr_improvement_db'] = self.calculate_snr(clean, enhanced, noisy)
         metrics['psnr_db'] = self.calculate_psnr(clean, enhanced)
+        metrics['si_sdr_db'] = self.calculate_si_sdr(clean, enhanced)
         metrics['stoi_score'] = self.calculate_stoi(clean, enhanced)
+        metrics['pesq_score'] = self.calculate_pesq(clean, enhanced)
         
         # 啸叫抑制指标
         howling_metrics = self.calculate_howling_reduction(noisy, enhanced)
@@ -300,38 +407,45 @@ def calculate_mos_score(metrics: Dict[str, float]) -> float:
     """Estimate Mean Opinion Score (MOS) from objective metrics.
     
     Uses a simplified weighted formula to estimate MOS (1-5 scale) from
-    objective metrics. For production use, consider training a regression
-    model with subjective evaluation data.
+    objective metrics including SI-SDR, PESQ, STOI.
     
     Args:
         metrics (Dict[str, float]): Dictionary of objective metrics including
-                                   snr_improvement_db, stoi_score, psnr_db,
-                                   and howling_reduction_db
+                                   si_sdr_db, pesq_score, stoi_score,
+                                   and snr_improvement_db
                                    
     Returns:
         float: Estimated MOS score on a scale of 1 to 5
     """
-    # 简化的MOS估算公式
-    # 实际应用中建议使用主观评估数据训练回归模型
+    # 权重设置：PESQ和STOI是感知指标，权重更高
+    pesq_weight = 0.35
+    stoi_weight = 0.30
+    si_sdr_weight = 0.20
+    snr_weight = 0.15
     
-    snr_weight = 0.3
-    stoi_weight = 0.4
-    psnr_weight = 0.2
-    howling_weight = 0.1
+    # 归一化PESQ到0-1范围（PESQ范围约-0.5到4.5）
+    pesq_val = metrics.get('pesq_score', 1.0)
+    pesq_norm = max(0.0, min(1.0, (pesq_val - 1.0) / 3.5))
     
-    # 归一化指标到0-1范围
-    snr_norm = min(1.0, max(0.0, metrics.get('snr_improvement_db', 0) / 20))
-    stoi_norm = metrics.get('stoi_score', 0)
-    psnr_norm = min(1.0, max(0.0, metrics.get('psnr_db', 0) / 40))
-    howling_norm = min(1.0, max(0.0, metrics.get('howling_reduction_db', 0) / 10))
+    # STOI已经是0-1范围
+    stoi_norm = max(0.0, min(1.0, metrics.get('stoi_score', 0)))
+    
+    # SI-SDR归一化（通常-5到20dB范围）
+    si_sdr_val = metrics.get('si_sdr_db', 0)
+    si_sdr_norm = max(0.0, min(1.0, (si_sdr_val + 5) / 25))
+    
+    # SNR改善归一化（通常-5到20dB范围）
+    snr_val = metrics.get('snr_improvement_db', 0)
+    snr_norm = max(0.0, min(1.0, (snr_val + 5) / 25))
     
     # 加权平均
-    quality_score = (snr_weight * snr_norm + 
+    quality_score = (pesq_weight * pesq_norm + 
                     stoi_weight * stoi_norm + 
-                    psnr_weight * psnr_norm + 
-                    howling_weight * howling_norm)
+                    si_sdr_weight * si_sdr_norm + 
+                    snr_weight * snr_norm)
     
     # 映射到MOS 1-5分
     mos_score = 1 + quality_score * 4
     
-    return mos_score
+    # 确保在1-5范围内
+    return max(1.0, min(5.0, mos_score))

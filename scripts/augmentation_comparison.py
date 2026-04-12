@@ -286,7 +286,7 @@ def train_and_evaluate(aug_name, augmenter, model_name, train_loader, val_loader
             noisy, clean = noisy.to(device), clean.to(device)
             pred = model(noisy)
             final_losses.append(nn.L1Loss()(pred, clean).item())
-            m = metrics_calc.calculate_all_metrics(clean=pred, noisy=noisy, enhanced=pred)
+            m = metrics_calc.calculate_all_metrics(clean=clean, noisy=noisy, enhanced=pred)
             for k in eval_metrics:
                 if k in m:
                     eval_metrics[k].append(m[k])

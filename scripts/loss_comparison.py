@@ -165,7 +165,7 @@ def train_one_loss(loss_name, loss_type, model_name, train_loader, val_loader,
             pred = model(noisy)
             final_l1_losses.append(nn.L1Loss()(pred, clean).item())
             final_mse_losses.append(nn.MSELoss()(pred, clean).item())
-            m = metrics_calc.calculate_all_metrics(clean=pred, noisy=noisy, enhanced=pred)
+            m = metrics_calc.calculate_all_metrics(clean=clean, noisy=noisy, enhanced=pred)
             for k in eval_metrics:
                 if k in m:
                     eval_metrics[k].append(m[k])

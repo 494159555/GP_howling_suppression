@@ -29,7 +29,8 @@ class HowlingDataset(Dataset):
         hop_length=None,
         augment=False,
         audio_aug_params=None,
-        spec_aug_params=None
+        spec_aug_params=None,
+        return_waveform=False,
     ):
         self.clean_dir = clean_dir
         self.howling_dir = howling_dir
@@ -64,9 +65,17 @@ class HowlingDataset(Dataset):
         # 获取排序后的文件名列表
         self.filenames = sorted(os.listdir(str(self.howling_dir)))
 
+        # 评估模式：额外返回波形和复数STFT（用于时域指标计算）
+        self.return_waveform = return_waveform
+
         # 初始化频谱变换
         self.spec_transform = torchaudio.transforms.Spectrogram(
             n_fft=self.n_fft, hop_length=self.hop_length, power=2.0
+        )
+
+        # 复数STFT变换（用于评估时iSTFT还原）
+        self.complex_stft_transform = torchaudio.transforms.Spectrogram(
+            n_fft=self.n_fft, hop_length=self.hop_length, power=None
         )
 
     def _fix_length(self, waveform: torch.Tensor) -> torch.Tensor:
@@ -83,14 +92,18 @@ class HowlingDataset(Dataset):
         """数据集样本数"""
         return len(self.filenames)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int):
         """获取数据样本
         
         Args:
             idx: 样本索引
             
         Returns:
-            (noisy_mag, clean_mag): 预处理后的频谱对，形状[1, 256, T]
+            当 return_waveform=False (默认，用于训练):
+                (noisy_mag, clean_mag): 预处理后的频谱对，形状[1, 256, T]
+            当 return_waveform=True (用于评估):
+                (noisy_mag, clean_mag, noisy_wave, clean_wave, noisy_stft_complex):
+                额外返回原始波形和复数STFT（用于iSTFT还原时域信号计算STOI/PESQ）
         """
         # 1. 加载音频
         file_name = self.filenames[idx]
@@ -141,14 +154,29 @@ class HowlingDataset(Dataset):
         howling_out = howling_norm[:, :-1, :]
         clean_out = clean_norm[:, :-1, :]
 
+        # 8. 评估模式：额外返回波形和复数STFT
+        if self.return_waveform:
+            # 复数STFT（用于评估时结合预测幅度做iSTFT）
+            noisy_stft_complex = self.complex_stft_transform(howling_wave)
+            return howling_out, clean_out, howling_wave, clean_wave, noisy_stft_complex
+
         return howling_out, clean_out
 
-    def _get_zero_tensors(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _get_zero_tensors(self):
         """生成零张量作为后备"""
         freq_bins = self.n_fft // 2 + 1
         time_frames = int(self.chunk_size / (self.n_fft / 2)) + 1
         
         freq_bins_cropped = freq_bins - 1
+        
+        if self.return_waveform:
+            return (
+                torch.zeros(1, freq_bins_cropped, time_frames),
+                torch.zeros(1, freq_bins_cropped, time_frames),
+                torch.zeros(1, self.chunk_size),
+                torch.zeros(1, self.chunk_size),
+                torch.zeros(freq_bins, time_frames, dtype=torch.complex64),
+            )
         
         return (
             torch.zeros(1, freq_bins_cropped, time_frames),

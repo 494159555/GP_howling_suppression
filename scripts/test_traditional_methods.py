@@ -149,9 +149,9 @@ def test_metrics_integration():
             
             # 计算所有指标（与evaluate_all.py中的流程一致）
             sample_metrics = metrics_calc.calculate_all_metrics(
-                clean=pred_mag,
+                clean=clean_mag,     # 修复：使用干净语音作为参考
                 noisy=noisy_mag,
-                enhanced=pred_mag,
+                enhanced=pred_mag,   # 修复：模型输出作为增强结果
             )
             
             mos = calculate_mos_score(sample_metrics)
@@ -284,7 +284,7 @@ def test_with_real_data():
                     
                     # 计算指标
                     sample_metrics = metrics_calc.calculate_all_metrics(
-                        clean=pred_mag, noisy=noisy_mag, enhanced=pred_mag,
+                        clean=clean_mag, noisy=noisy_mag, enhanced=pred_mag,
                     )
                     
                     if batch_idx == 0:

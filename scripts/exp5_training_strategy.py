@@ -320,7 +320,7 @@ def train_one_strategy(strategy_name, model_name, train_loader, val_loader, devi
             noisy, clean = noisy.to(device), clean.to(device)
             pred = model(noisy)
             final_l1_losses.append(nn.L1Loss()(pred, clean).item())
-            m = metrics_calc.calculate_all_metrics(clean=pred, noisy=noisy, enhanced=pred)
+            m = metrics_calc.calculate_all_metrics(clean=clean, noisy=noisy, enhanced=pred)
             for k in eval_metrics:
                 if k in m:
                     eval_metrics[k].append(m[k])

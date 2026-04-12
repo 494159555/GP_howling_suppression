@@ -216,7 +216,7 @@ def train_and_evaluate(config_name, use_attention, use_residual, use_dilated,
             noisy, clean = noisy.to(device), clean.to(device)
             pred = model(noisy)
             final_losses.append(torch.nn.L1Loss()(pred, clean).item())
-            m = metrics_calc.calculate_all_metrics(clean=pred, noisy=noisy, enhanced=pred)
+            m = metrics_calc.calculate_all_metrics(clean=clean, noisy=noisy, enhanced=pred)
             for k in all_metrics:
                 if k in m:
                     all_metrics[k].append(m[k])
