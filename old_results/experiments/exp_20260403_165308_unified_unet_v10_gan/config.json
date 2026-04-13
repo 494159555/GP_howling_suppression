@@ -1,0 +1,16 @@
+{
+    "experiment_name": "exp_20260403_165308_unified_unet_v10_gan",
+    "model": "AudioUNet5GAN",
+    "total_params": 1540754,
+    "learning_rate": 0.0002,
+    "batch_size_per_gpu": 2,
+    "total_batch_size": 2,
+    "world_size": 1,
+    "num_epochs": 3,
+    "loss_function": "adversarial",
+    "lr_scheduler": "plateau",
+    "mixed_precision": true,
+    "parallel_mode": "single",
+    "train_samples": 5238,
+    "val_samples": 655
+}

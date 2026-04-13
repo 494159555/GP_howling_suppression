@@ -1,0 +1,45 @@
+# ========================================
+# U-Net V1 配置文件
+# ========================================
+# 模型名称: AudioUNet3
+# 描述: 3层基线U-Net
+# 特点: 轻量级架构，适合快速原型开发
+# ========================================
+
+# ========== 模型配置 ==========
+model:
+  name: unet_v1
+  class_name: AudioUNet3
+  description: "3层基线U-Net，轻量级架构"
+
+# ========== 训练参数 ==========
+training:
+  # 基础训练参数
+  learning_rate: 0.0001      # 学习率
+  batch_size: 8              # 批大小
+  num_epochs: 50             # 训练轮数
+  num_workers: 2             # 数据加载线程数
+  weight_decay: 1.0e-5       # 权重衰减（L2正则化）
+
+  # 学习率调度器
+  lr_scheduler:
+    type: "plateau"          # 调度器类型: plateau, cosine_warmup, one_cycle, step
+    factor: 0.5              # ReduceLROnPlateau: 衰减因子
+    patience: 3              # ReduceLROnPlateau: 等待轮数
+
+# ========== 损失函数配置 ==========
+loss:
+  type: "l1"                 # 损失函数类型: l1, mse, spectral, multitask
+
+# ========== 数据增强配置 ==========
+augmentation:
+  enabled: false             # 是否启用数据增强
+
+# ========== 后处理配置 ==========
+post_processing:
+  enabled: false             # 是否启用后处理
+
+# ========== 实验信息 ==========
+experiment:
+  name: "baseline_unet_v1"   # 实验名称
+  description: "3层U-Net基线模型"

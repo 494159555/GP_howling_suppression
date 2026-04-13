@@ -242,10 +242,23 @@ def evaluate_traditional_methods(dataloader, device):
                     loss = torch.nn.L1Loss()(pred_mag, clean_mag)
                     method_losses.append(loss.item())
 
-                    # 修复：使用clean_mag作为参考，pred_mag作为增强输出
-                    sample_metrics = metrics_calc.calculate_all_metrics(
-                        clean=clean_mag, noisy=noisy_mag, enhanced=pred_mag,
-                    )
+                    # 时域评估（如果有波形数据）
+                    if noisy_stft is not None:
+                        try:
+                            from src.evaluate import _istft_from_mag_phase as _istft
+                            enhanced_wave = _istft(pred_mag.cpu(), noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
+                            noisy_wave_td = _istft(noisy_mag.cpu(), noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
+                            sample_metrics = metrics_calc.calculate_all_metrics(
+                                clean=clean_wave, noisy=noisy_wave_td, enhanced=enhanced_wave,
+                            )
+                        except Exception:
+                            sample_metrics = metrics_calc.calculate_all_metrics(
+                                clean=clean_mag, noisy=noisy_mag, enhanced=pred_mag,
+                            )
+                    else:
+                        sample_metrics = metrics_calc.calculate_all_metrics(
+                            clean=clean_mag, noisy=noisy_mag, enhanced=pred_mag,
+                        )
                     for key in method_metrics:
                         if key in sample_metrics:
                             method_metrics[key].append(sample_metrics[key])
@@ -279,11 +292,12 @@ def main():
     device = cfg.DEVICE
     print(f"设备: {device}")
 
-    # 准备数据
-    print("\n加载验证集...")
+    # 准备数据（使用 return_waveform=True 以支持时域评估 STOI/PESQ/SI-SDR）
+    print("\n加载验证集（含波形数据，用于时域评估）...")
     val_dataset = HowlingDataset(
         clean_dir=cfg.VAL_CLEAN_DIR,
         howling_dir=cfg.VAL_NOISY_DIR,
+        return_waveform=True,
     )
     val_loader = DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=cfg.NUM_WORKERS

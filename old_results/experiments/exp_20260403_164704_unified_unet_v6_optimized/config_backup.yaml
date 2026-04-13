@@ -1,0 +1,60 @@
+# ========================================
+# U-Net V6 配置文件
+# ========================================
+# 模型名称: AudioUNet5Optimized
+# 描述: 5层U-Net 综合优化版
+# 特点: 注意力 + 残差 + 空洞卷积，三合一设计
+# 适用场景: 追求最佳性能的通用场景（推荐）
+# ========================================
+
+# ========== 模型配置 ==========
+model:
+  name: unet_v6_optimized
+  class_name: AudioUNet5Optimized
+  description: "5层U-Net 综合优化版（注意力+残差+空洞）"
+  use_attention: true        # 启用注意力门
+  use_residual: true         # 启用残差连接
+  use_dilated: true          # 启用空洞卷积
+  dilation_rates: [1, 2, 4, 8, 16]
+
+# ========== 训练参数 ==========
+training:
+  # 基础训练参数
+  learning_rate: 0.0001      # 学习率
+  batch_size: 8              # 批大小
+  num_epochs: 50             # 训练轮数
+  num_workers: 2             # 数据加载线程数
+  weight_decay: 1.0e-5       # 权重衰减
+
+  # 学习率调度器
+  lr_scheduler:
+    type: "cosine_warmup"    # 推荐使用余弦退火+预热
+    warmup_epochs: 5         # 预热轮数
+    min_lr: 0.000001         # 最小学习率
+
+# ========== 损失函数配置 ==========
+loss:
+  type: "multitask"          # 多任务损失发挥模型优势
+  weights:
+    spectral: 0.5
+    l1: 0.3
+    mse: 0.2
+
+# ========== 数据增强配置 ==========
+augmentation:
+  enabled: true              # 优化模型推荐使用增强
+  spec_augment:
+    freq_masking: true
+    time_masking: true
+    freq_mask_param: 20
+    time_mask_param: 20
+
+# ========== 后处理配置 ==========
+post_processing:
+  enabled: false
+
+# ========== 实验信息 ==========
+experiment:
+  name: "optimized_unet_v6"
+  description: "综合优化版U-Net（推荐使用）"
+  notes: "这是性能最佳的模型配置"

@@ -1,0 +1,16 @@
+{
+    "experiment_name": "exp_20260330_155001_unet_v3_attention",
+    "model": "AudioUNet5Attention",
+    "total_params": 905381,
+    "learning_rate": 0.0001,
+    "batch_size_per_gpu": 32,
+    "total_batch_size": 64,
+    "world_size": 2,
+    "num_epochs": 100,
+    "loss_function": "multitask",
+    "lr_scheduler": "plateau",
+    "mixed_precision": true,
+    "parallel_mode": "DDP",
+    "train_samples": 5238,
+    "val_samples": 655
+}

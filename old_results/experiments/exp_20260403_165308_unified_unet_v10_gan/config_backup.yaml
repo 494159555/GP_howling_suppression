@@ -1,0 +1,68 @@
+# ========================================
+# U-Net V10 配置文件
+# ========================================
+# 模型名称: AudioUNet5GAN
+# 描述: 基于生成对抗网络（GAN）的架构
+# 特点: 生成器(U-Net) + 判别器，对抗训练提升质量
+# 适用场景: 追求最佳音频生成质量
+# ========================================
+
+# ========== 模型配置 ==========
+model:
+  name: unet_v10_gan
+  class_name: AudioUNet5GAN
+  description: "基于GAN的U-Net架构"
+  generator:
+    name: "AudioUNet5"        # 生成器使用5层U-Net
+  discriminator:
+    name: "Discriminator"    # 判别器网络
+    ndf: 64                   # 判别器首层通道数
+    n_layers: 3               # 判别器层数
+
+# ========== 训练参数 ==========
+training:
+  # 基础训练参数
+  learning_rate: 0.0002      # GAN通常使用较高的学习率
+  batch_size: 4              # 批大小（GAN训练需要较小batch）
+  num_epochs: 100            # GAN需要更多训练轮数
+  num_workers: 2             # 数据加载线程数
+
+  # 对抗训练参数
+  gan:
+    lambda_adv: 0.1          # 对抗损失权重
+    discriminator_iters: 3   # 每轮训练判别器的次数
+    generator_iters: 1       # 每轮训练生成器的次数
+
+  # 学习率调度器
+  lr_scheduler:
+    type: "one_cycle"        # One Cycle策略
+    max_lr: 0.001            # 最大学习率
+    pct_start: 0.3           # 上升阶段占比
+
+# ========== 损失函数配置 ==========
+loss:
+  type: "adversarial"        # 对抗损失
+  content_loss: "l1"         # 内容损失类型
+  lambda_content: 1.0        # 内容损失权重
+
+# ========== 数据增强配置 ==========
+augmentation:
+  enabled: true              # GAN训练需要充足的数据增强
+  audio_augment:
+    enabled: true
+    noise_addition: true
+    pitch_shift: true
+    time_shift: true
+  spec_augment:
+    freq_masking: true
+    time_masking: true
+
+# ========== 后处理配置 ==========
+post_processing:
+  enabled: false
+
+# ========== 实验信息 ==========
+experiment:
+  name: "gan_unet_v10"
+  description: "基于GAN架构的U-Net"
+  notes: "训练时间较长，建议使用GPU"

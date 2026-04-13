@@ -142,7 +142,7 @@ ABLATION_CONFIGS = [
 
 
 def train_and_evaluate(config_name, use_attention, use_residual, use_dilated,
-                       train_loader, val_loader, device, args):
+                       train_loader, val_loader, val_loader_td, device, args):
     """训练并评估单个消融配置"""
     print(f"\n{'='*60}")
     print(f"  消融配置: {config_name}")
@@ -211,12 +211,30 @@ def train_and_evaluate(config_name, use_attention, use_residual, use_dilated,
     }
     final_losses = []
 
+    # 优先使用时域评估（STOI/PESQ需要时域信号）
+    use_td = val_loader_td is not None
     with torch.no_grad():
+        td_iter = iter(val_loader_td) if use_td else None
         for noisy, clean in val_loader:
             noisy, clean = noisy.to(device), clean.to(device)
             pred = model(noisy)
             final_losses.append(torch.nn.L1Loss()(pred, clean).item())
-            m = metrics_calc.calculate_all_metrics(clean=clean, noisy=noisy, enhanced=pred)
+
+            if use_td:
+                try:
+                    td_batch = next(td_iter)
+                    td_noisy, td_clean, td_noisy_wave, td_clean_wave, td_noisy_stft = td_batch
+                    td_noisy = td_noisy.to(device)
+                    td_pred = model(td_noisy)
+                    from src.evaluate import _istft_from_mag_phase
+                    enhanced_wave = _istft_from_mag_phase(td_pred.cpu(), td_noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
+                    noisy_wave_td = _istft_from_mag_phase(td_noisy.cpu(), td_noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
+                    m = metrics_calc.calculate_all_metrics(clean=td_clean_wave, noisy=noisy_wave_td, enhanced=enhanced_wave)
+                except Exception:
+                    m = metrics_calc.calculate_all_metrics(clean=clean, noisy=noisy, enhanced=pred)
+            else:
+                m = metrics_calc.calculate_all_metrics(clean=clean, noisy=noisy, enhanced=pred)
+
             for k in all_metrics:
                 if k in m:
                     all_metrics[k].append(m[k])
@@ -272,8 +290,11 @@ def main():
     print("\n加载数据集...")
     train_dataset = HowlingDataset(cfg.TRAIN_CLEAN_DIR, cfg.TRAIN_NOISY_DIR)
     val_dataset = HowlingDataset(cfg.VAL_CLEAN_DIR, cfg.VAL_NOISY_DIR)
+    # 带波形的验证集用于时域评估（STOI/PESQ/SI-SDR）
+    val_dataset_td = HowlingDataset(cfg.VAL_CLEAN_DIR, cfg.VAL_NOISY_DIR, return_waveform=True)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2)
+    val_loader_td = DataLoader(val_dataset_td, batch_size=args.batch_size, shuffle=False, num_workers=2)
     print(f"训练: {len(train_dataset)}, 验证: {len(val_dataset)}")
 
     # 输出目录
@@ -297,7 +318,7 @@ def main():
     all_results = []
     for name, attn, res, dil in configs:
         result = train_and_evaluate(
-            name, attn, res, dil, train_loader, val_loader, device, args
+            name, attn, res, dil, train_loader, val_loader, val_loader_td, device, args
         )
         all_results.append(result)
 

@@ -559,11 +559,26 @@ def evaluate_model(
         print(f"  啸叫抑制: {metrics.get('howling_reduction_db', 0):.2f} dB")
         print(f"  MOS估算: {metrics.get('mos_estimate', 0):.2f}")
 
-    # 5. 传统方法对比
+    # 5. 传统方法对比（使用波形数据集以确保公平对比）
     traditional_results = None
     if compare_traditional:
         print("\n正在评估传统方法...")
-        traditional_results = evaluate_traditional_methods(val_loader, device)
+        # 如果已有波形数据集就复用，否则创建一个
+        if full_metrics and val_loader_td is not None:
+            trad_loader = val_loader_td
+        else:
+            trad_dataset = HowlingDataset(
+                clean_dir=cfg.VAL_CLEAN_DIR,
+                howling_dir=cfg.VAL_NOISY_DIR,
+                sample_rate=cfg.SAMPLE_RATE,
+                chunk_len=cfg.CHUNK_LEN,
+                n_fft=cfg.N_FFT,
+                return_waveform=True,
+            )
+            trad_loader = DataLoader(
+                trad_dataset, batch_size=batch_size, shuffle=False, num_workers=cfg.NUM_WORKERS
+            )
+        traditional_results = evaluate_traditional_methods(trad_loader, device)
 
         print("\n" + "-" * 50)
         print("传统方法对比")

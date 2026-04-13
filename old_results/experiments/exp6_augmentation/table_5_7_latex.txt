@@ -1,0 +1,16 @@
+\begin{table}[htbp]
+\centering
+\caption{数据增强策略对比结果（AudioUNet5Optimized, Composite Loss, Warmup+CosineDecay）}
+\label{tab:augmentation_comparison}
+\begin{tabular}{lcccccc}
+\toprule
+增强策略 & L1 Loss $\downarrow$ & SNR改善 (dB) $\uparrow$ & STOI $\uparrow$ & MOS $\uparrow$ & Howling衰减(dB) & 耗时 (s) \\
+\midrule
+无增强(Baseline) & 0.3039 & 70.92 & 1.0000 & 4.60 & -0.44 & 3976.7 \\
+综合增强(Full) & 0.1742 & 66.35 & 1.0000 & 4.60 & -1.87 & 4036.1 \\
+时间掩蔽(TimeMask) & 0.1431 & 65.02 & 1.0000 & 4.60 & -2.29 & 4013.9 \\
+频率掩蔽(FreqMask) & 0.0960 & 62.89 & 1.0000 & 4.60 & -3.45 & 3987.2 \\
+联合掩蔽(JointMask) & 0.1082 & 62.03 & 1.0000 & 4.60 & -3.41 & 4017.9 \\
+\bottomrule
+\end{tabular}
+\end{table}

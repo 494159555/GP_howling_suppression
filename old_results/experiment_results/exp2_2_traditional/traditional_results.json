@@ -1,0 +1,44 @@
+{
+    "FrequencyShift": {
+        "model_name": "FrequencyShift",
+        "description": "移频法 — 频偏 20Hz，STFT域线性插值",
+        "avg_loss": 0.0578,
+        "snr_improvement_db": 41.57,
+        "psnr_db": 26.51,
+        "stoi_score": 1.0,
+        "howling_reduction_db": -80.0,
+        "mos_estimate": 4.6,
+        "avg_inference_ms": 21.42,
+        "param_count": 0,
+        "eval_samples": 33,
+        "note": "无参数方法, 真实数据子集评估"
+    },
+    "GainSuppression": {
+        "model_name": "GainSuppression",
+        "description": "增益抑制法 — 频率范围 1kHz-8kHz，阈值 -30dB，衰减 -20dB",
+        "avg_loss": 0.3146,
+        "snr_improvement_db": 53.7,
+        "psnr_db": 17.85,
+        "stoi_score": 0.9513,
+        "howling_reduction_db": -80.0,
+        "mos_estimate": 4.6,
+        "avg_inference_ms": 93353.46,
+        "param_count": 0,
+        "eval_samples": 3,
+        "note": "无参数方法, 合成数据评估(实现含逐帧Python循环, 大数据集耗时过长)"
+    },
+    "AdaptiveFeedback": {
+        "model_name": "AdaptiveFeedback",
+        "description": "自适应反馈消除法 — NLMS算法，滤波器长度64，步长0.01",
+        "avg_loss": 0.189,
+        "snr_improvement_db": 53.33,
+        "psnr_db": 20.37,
+        "stoi_score": 0.9728,
+        "howling_reduction_db": -80.0,
+        "mos_estimate": 4.6,
+        "avg_inference_ms": 45.53,
+        "param_count": 0,
+        "eval_samples": 3,
+        "note": "无参数方法, 合成数据评估"
+    }
+}
