@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Model checkpoints (大文件，不应提交到Git)
+*.pth
+*.pt
+*.ckpt
+*.pkl
+*.h5
+
+# TensorBoard logs
+events.out.tfevents.*
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 环境文件
+.env
+env/
+
+# 大规模实验输出目录（如需选择性提交可单独 git add）
+# experiments/
+
+# 数据目录（如有原始音频数据集）
+data/
+*.wav
+*.flac
+*.mp3
