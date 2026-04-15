@@ -203,7 +203,9 @@ def evaluate_traditional_methods(dataloader, device):
         method_metrics = {
             'snr_improvement_db': [],
             'psnr_db': [],
+            'si_sdr_db': [],
             'stoi_score': [],
+            'pesq_score': [],
             'howling_reduction_db': [],
         }
         inference_times = []
@@ -270,6 +272,74 @@ def evaluate_traditional_methods(dataloader, device):
         all_results[method_name] = results
 
     return all_results
+
+
+def evaluate_baseline(dataloader, device):
+    """评估未处理（带啸叫）信号的基线指标
+
+    计算clean vs noisy（无任何处理）的SI-SDR、PESQ、STOI等指标，
+    作为所有方法的性能下界参考。
+    """
+    metrics_calc = AudioMetrics(sample_rate=cfg.SAMPLE_RATE)
+
+    baseline_metrics = {
+        'snr_improvement_db': [],
+        'psnr_db': [],
+        'si_sdr_db': [],
+        'stoi_score': [],
+        'pesq_score': [],
+        'howling_reduction_db': [],
+    }
+
+    with torch.no_grad():
+        for batch in dataloader:
+            if len(batch) >= 5:
+                noisy_mag, clean_mag, noisy_wave, clean_wave, noisy_stft = batch
+            else:
+                noisy_mag, clean_mag = batch
+                noisy_wave = clean_wave = noisy_stft = None
+
+            noisy_mag = noisy_mag.to(device)
+            clean_mag = clean_mag.to(device)
+
+            # 基线：不经过任何处理，直接用noisy作为enhanced
+            if noisy_stft is not None:
+                try:
+                    noisy_wave_td = _istft_from_mag_phase(noisy_mag.cpu(), noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
+                    sample_metrics = {
+                        'snr_improvement_db': 0.0,  # 未处理，SNR改善为0
+                        'si_sdr_db': metrics_calc.calculate_si_sdr(clean_wave, noisy_wave_td),
+                        'stoi_score': metrics_calc.calculate_stoi(clean_wave, noisy_wave_td),
+                        'pesq_score': metrics_calc.calculate_pesq(clean_wave, noisy_wave_td),
+                        'psnr_db': metrics_calc.calculate_psnr(clean_wave, noisy_wave_td),
+                    }
+                    # 啸叫抑制指标（noisy vs noisy = 无抑制）
+                    howling_metrics = metrics_calc.calculate_howling_reduction(noisy_mag.cpu(), noisy_mag.cpu())
+                    sample_metrics.update(howling_metrics)
+                except Exception:
+                    sample_metrics = metrics_calc.calculate_all_metrics(
+                        clean=clean_mag, noisy=noisy_mag, enhanced=noisy_mag,
+                    )
+                    sample_metrics['snr_improvement_db'] = 0.0
+            else:
+                sample_metrics = metrics_calc.calculate_all_metrics(
+                    clean=clean_mag, noisy=noisy_mag, enhanced=noisy_mag,
+                )
+                sample_metrics['snr_improvement_db'] = 0.0
+
+            for key in baseline_metrics:
+                if key in sample_metrics:
+                    baseline_metrics[key].append(sample_metrics[key])
+
+    results = {'avg_loss': 0.0}
+    for key, values in baseline_metrics.items():
+        results[key] = float(np.mean(values)) if values else 0.0
+    results['mos_estimate'] = calculate_mos_score(results)
+    results['avg_inference_ms'] = 0.0
+    results['param_count'] = 0
+    results['model_name'] = 'Baseline (No Processing)'
+
+    return results
 
 
 def main():
@@ -344,6 +414,16 @@ def main():
             import traceback
             traceback.print_exc()
 
+    # 评估未处理信号基线
+    print(f"\n{'='*60}")
+    print("  评估未处理信号基线（No Processing Baseline）")
+    print(f"{'='*60}")
+    baseline_results = evaluate_baseline(val_loader, device)
+    all_results['Baseline'] = baseline_results
+    print(f"    SI-SDR: {baseline_results['si_sdr_db']:.2f} dB")
+    print(f"    PESQ: {baseline_results['pesq_score']:.4f}")
+    print(f"    STOI: {baseline_results['stoi_score']:.4f}")
+
     # 评估传统方法
     if not args.skip_traditional:
         print(f"\n{'='*60}")
@@ -358,20 +438,22 @@ def main():
         json.dump(all_results, f, indent=4, ensure_ascii=False, default=str)
 
     # 打印对比表格
-    print(f"\n{'='*70}")
+    print(f"\n{'='*90}")
     print("  评估结果对比")
-    print(f"{'='*70}")
-    header = f"{'方法':25s} | {'Loss':>8s} | {'SNR':>8s} | {'PSNR':>8s} | {'STOI':>7s} | {'啸叫抑制':>8s} | {'MOS':>5s} | {'推理ms':>8s}"
+    print(f"{'='*90}")
+    header = (f"{'方法':25s} | {'SI-SDR':>8s} | {'PESQ':>7s} | {'STOI':>7s} | "
+              f"{'SNR改善':>8s} | {'啸叫抑制':>8s} | {'MOS':>5s} | {'推理ms':>8s}")
     print(header)
     print("-" * len(header))
 
     # 按MOS排序
     sorted_results = sorted(all_results.items(), key=lambda x: x[1].get('mos_estimate', 0), reverse=True)
     for name, metrics in sorted_results:
-        print(f"{name:25s} | {metrics['avg_loss']:8.4f} | "
-              f"{metrics['snr_improvement_db']:8.2f} | "
-              f"{metrics['psnr_db']:8.2f} | "
+        print(f"{name:25s} | "
+              f"{metrics.get('si_sdr_db', 0.0):8.2f} | "
+              f"{metrics.get('pesq_score', 0.0):7.4f} | "
               f"{metrics['stoi_score']:7.4f} | "
+              f"{metrics['snr_improvement_db']:8.2f} | "
               f"{metrics['howling_reduction_db']:8.2f} | "
               f"{metrics['mos_estimate']:5.2f} | "
               f"{metrics['avg_inference_ms']:8.2f}")

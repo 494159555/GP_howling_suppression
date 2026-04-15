@@ -67,94 +67,90 @@ class GainSuppressionMethod(nn.Module):
         self.register_buffer('background_estimate', None)
         
     def forward(self, x):
-        """前向传播
-        
+        """前向传播（向量化版本，消除Python嵌套循环）
+
         Args:
             x: 输入频谱图 [B, 1, F, T]
-            
+
         Returns:
             处理后的频谱图 [B, 1, F, T]
         """
         batch_size, channels, freq_bins, time_frames = x.shape
-        
+
         # 转换为线性域
-        x_linear = torch.pow(10, x)
-        
-        # 初始化状态（检查batch_size和time_frames是否匹配）
-        if (self.gain_mask is None or 
-            self.gain_mask.shape[0] != batch_size or
-            self.gain_mask.shape[-1] != time_frames):
-            self.gain_mask = torch.ones(batch_size, freq_bins, time_frames, device=x.device)
-            self.background_estimate = torch.zeros(batch_size, freq_bins, time_frames, device=x.device)
-        
-        # 处理时间帧
-        processed_spec = torch.zeros_like(x_linear.squeeze(1))
-        
-        for t in range(time_frames):
-            current_frame = x_linear[:, 0, :, t]
-            
-            # 更新背景估计
-            if t == 0:
-                self.background_estimate[:, :, t] = current_frame
-            else:
-                alpha = 0.95
-                self.background_estimate[:, :, t] = (
-                    alpha * self.background_estimate[:, :, t-1] + 
-                    (1 - alpha) * current_frame
-                )
-            
-            # 计算信噪比
-            snr = current_frame / (self.background_estimate[:, :, t] + 1e-8)
-            
-            # 检测啸叫
-            howling_mask = self._detect_howling(snr, t)
-            
-            # 更新增益掩码
-            if t == 0:
-                self.gain_mask[:, :, t] = torch.ones(batch_size, freq_bins, device=x.device)
-            else:
-                target_gain = torch.where(
-                    howling_mask,
-                    torch.full_like(howling_mask, self.max_attenuation_linear, dtype=torch.float32),
-                    torch.ones_like(howling_mask, dtype=torch.float32)
-                )
-                
-                gain_diff = target_gain - self.gain_mask[:, :, t-1]
-                gain_change = torch.where(
-                    gain_diff < 0,
-                    gain_diff * (1 - self.attack_coeff),
-                    gain_diff * (1 - self.release_coeff)
-                )
-                
-                self.gain_mask[:, :, t] = self.gain_mask[:, :, t-1] + gain_change
-            
-            processed_spec[:, :, t] = current_frame * self.gain_mask[:, :, t]
-        
+        x_linear = torch.pow(10, x).squeeze(1)  # [B, F, T]
+
+        # 向量化计算背景估计（EMA）
+        alpha = 0.95
+        background = torch.zeros_like(x_linear)
+        background[:, :, 0] = x_linear[:, :, 0]
+        for t in range(1, time_frames):
+            background[:, :, t] = alpha * background[:, :, t-1] + (1 - alpha) * x_linear[:, :, t]
+
+        # 向量化计算SNR
+        snr = x_linear / (background + 1e-8)  # [B, F, T]
+
+        # 向量化啸叫检测（跨所有时间帧同时计算）
+        howling_mask = self._detect_howling_vectorized(snr, freq_bins)  # [B, F, T]
+
+        # 计算目标增益
+        target_gain = torch.where(
+            howling_mask,
+            torch.tensor(self.max_attenuation_linear, device=x.device),
+            torch.tensor(1.0, device=x.device)
+        )
+
+        # 顺序更新增益掩码（攻击/释放时间常数要求顺序依赖）
+        gain_mask = torch.ones_like(x_linear)
+        for t in range(1, time_frames):
+            gain_diff = target_gain[:, :, t] - gain_mask[:, :, t-1]
+            gain_change = torch.where(
+                gain_diff < 0,
+                gain_diff * (1 - self.attack_coeff),
+                gain_diff * (1 - self.release_coeff)
+            )
+            gain_mask[:, :, t] = gain_mask[:, :, t-1] + gain_change
+
+        # 应用增益
+        processed_spec = x_linear * gain_mask
+
         # 转换回log域
         processed_log = torch.log10(processed_spec.unsqueeze(1) + 1e-8)
-        
+
         return processed_log
-    
-    def _detect_howling(self, snr, time_frame):
-        """检测啸叫频段"""
-        batch_size, freq_bins = snr.shape
-        howling_mask = torch.zeros_like(snr, dtype=torch.bool)
-        
-        for b in range(batch_size):
-            for f in range(self.min_bin, min(self.max_bin, freq_bins)):
-                if snr[b, f] > self.threshold_linear:
-                    # 检查局部峰值
-                    is_peak = True
-                    for df in [-2, -1, 1, 2]:
-                        nf = f + df
-                        if 0 <= nf < freq_bins and snr[b, nf] >= snr[b, f]:
-                            is_peak = False
-                            break
-                    
-                    if is_peak:
-                        howling_mask[b, f] = True
-        
-        return howling_mask
+
+    def _detect_howling_vectorized(self, snr, freq_bins):
+        """向量化啸叫检测
+
+        同时处理所有batch和所有时间帧，使用tensor操作替代Python循环。
+
+        Args:
+            snr: 信噪比 [B, F, T]
+            freq_bins: 频率bin数量
+
+        Returns:
+            howling_mask: 啸叫掩码 [B, F, T]
+        """
+        # 阈值检测
+        above_threshold = snr > self.threshold_linear
+
+        # 局部峰值检测：当前bin必须严格大于所有邻居
+        is_peak = torch.ones_like(snr, dtype=torch.bool)
+        for df in [-2, -1, 1, 2]:
+            shifted = torch.roll(snr, shifts=-df, dims=1)
+            # 边界处理：越界邻居不参与判断（设为-inf使比较恒True）
+            if df < 0:
+                shifted[:, :abs(df), :] = float('-inf')
+            else:
+                shifted[:, -df:, :] = float('-inf')
+            is_peak = is_peak & (snr > shifted)
+
+        # 频率范围掩码
+        freq_mask = torch.zeros_like(snr, dtype=torch.bool)
+        max_bin = min(self.max_bin, freq_bins)
+        freq_mask[:, self.min_bin:max_bin, :] = True
+
+        return above_threshold & is_peak & freq_mask
 
 
 def create_gain_suppression_method(threshold_db=-30.0, **kwargs):
