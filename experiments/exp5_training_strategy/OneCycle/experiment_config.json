@@ -1,0 +1,17 @@
+{
+    "experiment": "exp5_training_strategy_comparison",
+    "model": "unet_v6_optimized",
+    "loss": "CompositeLoss (MR-STFT alpha=1.0 + SI-SDR beta=0.5)",
+    "optimizer": "Adam",
+    "weight_decay": 1e-05,
+    "initial_lr": 0.001,
+    "batch_size": 16,
+    "max_epochs": 50,
+    "patience": 15,
+    "amp": true,
+    "gradient_clip": 1.0,
+    "seed": 42,
+    "strategies": [
+        "OneCycle"
+    ]
+}

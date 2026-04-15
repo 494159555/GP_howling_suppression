@@ -1,0 +1,40 @@
+{
+    "experiment": "exp1_train_all_models",
+    "total_models": 4,
+    "successful": 4,
+    "failed": 0,
+    "total_time_seconds": 21345.906510829926,
+    "unified_config": {
+        "epochs": 100,
+        "batch_size": 64,
+        "lr": null,
+        "loss": null,
+        "seed": 42
+    },
+    "results": [
+        {
+            "model": "unet_v1",
+            "success": true,
+            "elapsed_seconds": 2327.2505626678467,
+            "return_code": 0
+        },
+        {
+            "model": "unet_v2",
+            "success": true,
+            "elapsed_seconds": 4061.556445837021,
+            "return_code": 0
+        },
+        {
+            "model": "unet_v3_attention",
+            "success": true,
+            "elapsed_seconds": 5770.546485900879,
+            "return_code": 0
+        },
+        {
+            "model": "unet_v6_optimized",
+            "success": true,
+            "elapsed_seconds": 9186.551592350006,
+            "return_code": 0
+        }
+    ]
+}

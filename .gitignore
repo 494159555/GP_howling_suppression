@@ -36,7 +36,8 @@ Thumbs.db
 env/
 
 # 大规模实验输出目录（如需选择性提交可单独 git add）
-# experiments/
+# old_results/
+
 
 # 数据目录（如有原始音频数据集）
 data/

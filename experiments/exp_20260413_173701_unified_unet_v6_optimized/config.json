@@ -1,0 +1,17 @@
+{
+    "experiment_name": "exp_20260413_173701_unified_unet_v6_optimized",
+    "model": "AudioUNet5Optimized",
+    "total_params": 3132515,
+    "learning_rate": 0.0001,
+    "batch_size_per_gpu": 16,
+    "total_batch_size": 256,
+    "num_gpus": 4,
+    "world_size": 1,
+    "num_epochs": 100,
+    "loss_function": "multitask",
+    "lr_scheduler": "plateau",
+    "mixed_precision": true,
+    "parallel_mode": "DataParallel",
+    "train_samples": 5238,
+    "val_samples": 655
+}
