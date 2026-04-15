@@ -311,6 +311,8 @@ def train_one_strategy(strategy_name, model_name, train_loader, val_loader, val_
         'snr_improvement_db': [],
         'psnr_db': [],
         'stoi_score': [],
+        'si_sdr_db': [],
+        'pesq_score': [],
         'howling_reduction_db': [],
     }
     final_l1_losses = []
@@ -333,7 +335,17 @@ def train_one_strategy(strategy_name, model_name, train_loader, val_loader, val_
                     from src.evaluate import _istft_from_mag_phase
                     enhanced_wave = _istft_from_mag_phase(td_pred.cpu(), td_noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
                     noisy_wave_td = _istft_from_mag_phase(td_noisy.cpu(), td_noisy_stft, cfg.N_FFT, cfg.HOP_LENGTH)
-                    m = metrics_calc.calculate_all_metrics(clean=td_clean_wave, noisy=noisy_wave_td, enhanced=enhanced_wave)
+                    # 时域信号质量指标
+                    m = {
+                        'snr_improvement_db': metrics_calc.calculate_snr(td_clean_wave, enhanced_wave, noisy_wave_td),
+                        'psnr_db': metrics_calc.calculate_psnr(td_clean_wave, enhanced_wave),
+                        'si_sdr_db': metrics_calc.calculate_si_sdr(td_clean_wave, enhanced_wave),
+                        'stoi_score': metrics_calc.calculate_stoi(td_clean_wave, enhanced_wave),
+                        'pesq_score': metrics_calc.calculate_pesq(td_clean_wave, enhanced_wave),
+                    }
+                    # 啸叫抑制指标需要频谱数据
+                    howling_m = metrics_calc.calculate_howling_reduction(td_noisy.cpu(), td_pred.cpu())
+                    m.update(howling_m)
                 except Exception:
                     m = metrics_calc.calculate_all_metrics(clean=clean, noisy=noisy, enhanced=pred)
             else:

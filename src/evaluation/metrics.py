@@ -109,43 +109,61 @@ class AudioMetrics:
     
     def calculate_stoi(self, clean: torch.Tensor, enhanced: torch.Tensor) -> float:
         """Calculate short-time objective intelligibility (STOI).
-        
+
         Uses the pystoi library for accurate STOI calculation.
         Requires time-domain waveforms as input.
-        
+        Processes batch samples individually to avoid buffer overflow in C library.
+
         Args:
-            clean (torch.Tensor): Clean audio reference (time-domain waveform)
+            clean (torch.Tensor): Clean audio reference [B, 1, T] or [1, T] or [T]
             enhanced (torch.Tensor): Enhanced/processed audio (time-domain waveform)
-            
+
         Returns:
             float: STOI score between 0 and 1
         """
         from pystoi import stoi as stoi_func
-        
+
         clean_np = clean.detach().cpu().numpy()
         enhanced_np = enhanced.detach().cpu().numpy()
-        
-        # 展平为1D
-        if clean_np.ndim > 1:
-            clean_np = clean_np.flatten()
-            enhanced_np = enhanced_np.flatten()
-        
-        # 确保长度一致
+
+        # 逐样本计算，避免C库缓冲区溢出
+        if clean_np.ndim >= 2:
+            scores = []
+            for i in range(clean_np.shape[0]):
+                c = clean_np[i].flatten()
+                e = enhanced_np[i].flatten()
+                min_len = min(len(c), len(e))
+                c, e = c[:min_len], e[:min_len]
+                if len(c) < 256:
+                    scores.append(0.0)
+                    continue
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        s = float(stoi_func(c, e, self.sample_rate, extended=False))
+                    scores.append(max(0.0, min(1.0, s)))
+                except Exception:
+                    correlation = np.corrcoef(c, e)[0, 1]
+                    if np.isnan(correlation):
+                        scores.append(0.0)
+                    else:
+                        scores.append(float(max(0.0, min(1.0, (correlation + 1) / 2))))
+            return float(np.mean(scores)) if scores else 0.0
+
+        # 单个样本
         min_len = min(len(clean_np), len(enhanced_np))
         clean_np = clean_np[:min_len]
         enhanced_np = enhanced_np[:min_len]
-        
-        # STOI要求信号长度至少为256个采样点
+
         if len(clean_np) < 256:
             return 0.0
-        
+
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 stoi_score = float(stoi_func(clean_np, enhanced_np, self.sample_rate, extended=False))
             return max(0.0, min(1.0, stoi_score))
-        except Exception as e:
-            # 如果pystoi计算失败，回退到相关系数近似
+        except Exception:
             correlation = np.corrcoef(clean_np, enhanced_np)[0, 1]
             if np.isnan(correlation):
                 return 0.0
@@ -195,47 +213,77 @@ class AudioMetrics:
     
     def calculate_pesq(self, clean: torch.Tensor, enhanced: torch.Tensor) -> float:
         """Calculate Perceptual Evaluation of Speech Quality (PESQ).
-        
+
         Uses the pesq library. Requires time-domain waveforms as input.
         Only supports 8000Hz (narrowband) and 16000Hz (wideband) sample rates.
-        
+        Processes batch samples individually to avoid buffer overflow in C library.
+
         Args:
             clean (torch.Tensor): Clean audio reference (time-domain waveform)
             enhanced (torch.Tensor): Enhanced/processed audio (time-domain waveform)
-            
+
         Returns:
             float: PESQ score between -0.5 and 4.5
         """
         from pesq import pesq as pesq_func
-        
-        clean_np = clean.detach().cpu().numpy().flatten()
-        enhanced_np = enhanced.detach().cpu().numpy().flatten()
-        
-        # 确保长度一致
+
+        clean_np = clean.detach().cpu().numpy()
+        enhanced_np = enhanced.detach().cpu().numpy()
+
+        # 逐样本计算，避免C库缓冲区溢出
+        if clean_np.ndim >= 2:
+            scores = []
+            mode = 'wb' if self.sample_rate >= 16000 else 'nb'
+            for i in range(clean_np.shape[0]):
+                c = clean_np[i].flatten()
+                e = enhanced_np[i].flatten()
+                min_len = min(len(c), len(e))
+                c, e = c[:min_len], e[:min_len]
+
+                # 归一化到[-1, 1]
+                max_abs = max(np.abs(c).max(), np.abs(e).max(), 1e-8)
+                if max_abs > 1.0:
+                    c = c / max_abs
+                    e = e / max_abs
+
+                min_samples = int(self.sample_rate * 0.25)
+                if len(c) < min_samples:
+                    scores.append(1.0)
+                    continue
+
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        s = float(pesq_func(self.sample_rate, c, e, mode))
+                    scores.append(s)
+                except Exception:
+                    scores.append(1.0)
+            return float(np.mean(scores)) if scores else 1.0
+
+        # 单个样本
+        clean_np = clean_np.flatten()
+        enhanced_np = enhanced_np.flatten()
+
         min_len = min(len(clean_np), len(enhanced_np))
         clean_np = clean_np[:min_len]
         enhanced_np = enhanced_np[:min_len]
-        
-        # 确保在[-1, 1]范围内（归一化）
+
         max_abs = max(np.abs(clean_np).max(), np.abs(enhanced_np).max(), 1e-8)
         if max_abs > 1.0:
             clean_np = clean_np / max_abs
             enhanced_np = enhanced_np / max_abs
-        
-        # PESQ要求信号长度至少为8秒（8000采样点@16kHz或更长）
-        min_samples = int(self.sample_rate * 0.25)  # 至少0.25秒
+
+        min_samples = int(self.sample_rate * 0.25)
         if len(clean_np) < min_samples:
-            return 1.0  # 返回最低分
-        
+            return 1.0
+
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                # 选择模式：宽带(wb)用于16kHz，窄带(nb)用于8kHz
                 mode = 'wb' if self.sample_rate >= 16000 else 'nb'
                 pesq_score = float(pesq_func(self.sample_rate, clean_np, enhanced_np, mode))
             return pesq_score
-        except Exception as e:
-            # PESQ计算失败时返回默认值
+        except Exception:
             return 1.0
     
     def calculate_howling_reduction(self, noisy: torch.Tensor, enhanced: torch.Tensor,

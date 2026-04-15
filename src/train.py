@@ -1,7 +1,7 @@
 """训练模块
 
 音频啸叫抑制模型训练脚本，支持实验管理、监控和可视化
-支持5种U-Net变体、多种损失函数、训练策略和数据增强
+支持4种U-Net变体、多种损失函数、训练策略和数据增强
 """
 
 import argparse
@@ -29,14 +29,13 @@ from src.models.unet_v1 import AudioUNet3
 from src.models.unet_v2 import AudioUNet5
 from src.models.unet_v3_attention import AudioUNet5Attention
 from src.models.unet_v6_optimized import AudioUNet5Optimized
-from src.models.unet_v10_gan import AudioUNet5GAN
 
 # 导入损失函数
 try:
     from src.models.loss_functions import (
         SpectralLoss, SpectralConsistencyLoss,
         MultiTaskLoss, AdversarialLoss,
-        SISDRLoss, MultiResolutionSTFTLoss, CompositeLoss
+        SpectralConvergenceLoss, MultiResolutionSTFTLoss, CompositeLoss
     )
 except ImportError as e:
     print(f"⚠️ 警告: 无法导入部分损失函数模块 - {e}")
@@ -44,7 +43,7 @@ except ImportError as e:
     SpectralConsistencyLoss = None
     MultiTaskLoss = None
     AdversarialLoss = None
-    SISDRLoss = None
+    SpectralConvergenceLoss = None
     MultiResolutionSTFTLoss = None
     CompositeLoss = None
 
@@ -102,7 +101,6 @@ def parse_args():
   # DDP 多卡训练 (推荐，使用 torchrun)
   torchrun --nproc_per_node=4 src/train.py --model unet_v2
   torchrun --nproc_per_node=4 src/train.py --config configs/unet_v2.yaml --lr 2e-4
-  torchrun --nproc_per_node=4 src/train.py --model unet_v10_gan --exp-name gan_test
 
   # 指定 GPU（通过环境变量）
   CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 src/train.py
@@ -167,12 +165,6 @@ def parse_args():
     # 后处理
     parser.add_argument('--post-process', action='store_true',
                        help='启用后处理')
-
-    # GAN训练
-    parser.add_argument('--gan-lambda', type=float, default=100.0,
-                       help='GAN对抗损失权重')
-    parser.add_argument('--disc-lr', type=float, default=1e-4,
-                       help='判别器学习率')
 
     # 早停
     parser.add_argument('--early-stop', type=int, default=None,
@@ -276,13 +268,6 @@ def load_config_from_yaml(config_path: str) -> Dict[str, Any]:
         if 'method' in post_cfg:
             flat_config['post_processing_method'] = post_cfg['method']
 
-    if 'gan' in config:
-        gan_cfg = config['gan']
-        if 'lambda_adv' in gan_cfg:
-            flat_config['gan_lambda'] = gan_cfg['lambda_adv']
-        if 'discriminator_lr' in gan_cfg:
-            flat_config['disc_lr'] = gan_cfg['discriminator_lr']
-
     return flat_config
 
 
@@ -305,7 +290,6 @@ def get_model_class(model_name: str) -> type:
         AudioUNet5,
         AudioUNet5Attention,
         AudioUNet5Optimized,
-        AudioUNet5GAN,
     ]
 
     for cls in model_classes:
@@ -360,11 +344,11 @@ def get_loss_function(loss_type: str, loss_weights: Optional[Dict] = None) -> nn
             print("⚠️ 警告: AdversarialLoss 不可用，使用L1损失")
             return nn.L1Loss()
         return AdversarialLoss()
-    elif loss_type == 'si_sdr':
-        if SISDRLoss is None:
-            print("⚠️ 警告: SISDRLoss 不可用，使用L1损失")
+    elif loss_type == 'spectral_convergence':
+        if SpectralConvergenceLoss is None:
+            print("⚠️ 警告: SpectralConvergenceLoss 不可用，使用L1损失")
             return nn.L1Loss()
-        return SISDRLoss()
+        return SpectralConvergenceLoss()
     elif loss_type == 'multi_resolution_stft':
         if MultiResolutionSTFTLoss is None:
             print("⚠️ 警告: MultiResolutionSTFTLoss 不可用，使用L1损失")
@@ -464,28 +448,22 @@ class EarlyStopping:
 
 
 def train_one_epoch(model, dataloader, optimizer, criterion, device,
-                    scaler=None, discriminator=None, disc_optimizer=None,
-                    gan_lambda=100.0, use_amp=False):
+                    scaler=None, use_amp=False):
     """训练一个epoch
 
     Args:
-        model: 生成器模型
+        model: 模型
         dataloader: 数据加载器
         optimizer: 优化器
         criterion: 损失函数
         device: 设备
         scaler: GradScaler（混合精度）
-        discriminator: 判别器（GAN）
-        disc_optimizer: 判别器优化器
-        gan_lambda: 对抗损失权重
         use_amp: 是否使用混合精度
 
     Returns:
         平均损失
     """
     model.train()
-    if discriminator is not None:
-        discriminator.train()
 
     total_loss = 0.0
 
@@ -494,77 +472,21 @@ def train_one_epoch(model, dataloader, optimizer, criterion, device,
         clean_mag = clean_mag.to(device)
 
         optimizer.zero_grad()
-        if disc_optimizer is not None:
-            disc_optimizer.zero_grad()
 
         if use_amp and scaler is not None:
             with autocast():
                 pred_mag = model(noisy_mag)
+                loss = criterion(pred_mag, clean_mag)
 
-                if discriminator is not None:
-                    # GAN训练 - 分离两个步骤
-                    valid = torch.ones(noisy_mag.size(0), 1).to(device)
-                    fake = torch.zeros(noisy_mag.size(0), 1).to(device)
-
-                    # 步骤1: 训练判别器
-                    real_loss = nn.BCELoss()(discriminator(clean_mag.detach()), valid)
-                    fake_loss = nn.BCELoss()(discriminator(pred_mag.detach()), fake)
-                    disc_loss = (real_loss + fake_loss) / 2
-
-                    scaler.scale(disc_loss).backward()
-                    if disc_optimizer is not None:
-                        scaler.step(disc_optimizer)
-                        disc_optimizer.zero_grad()
-
-                    # 步骤2: 训练生成器（判别器参数已固定）
-                    scaler.update()
-                    scaler.unscale_(optimizer)
-                    optimizer.zero_grad()
-
-                    with autocast():
-                        gen_loss = criterion(pred_mag, clean_mag)
-                        adv_loss = nn.BCELoss()(discriminator(pred_mag), valid)
-                        loss = gen_loss + gan_lambda * adv_loss
-
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    loss = criterion(pred_mag, clean_mag)
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         else:
             pred_mag = model(noisy_mag)
+            loss = criterion(pred_mag, clean_mag)
 
-            if discriminator is not None:
-                # GAN训练 - 分离两个步骤
-                valid = torch.ones(noisy_mag.size(0), 1).to(device)
-                fake = torch.zeros(noisy_mag.size(0), 1).to(device)
-
-                # 步骤1: 训练判别器
-                real_loss = nn.BCELoss()(discriminator(clean_mag.detach()), valid)
-                fake_loss = nn.BCELoss()(discriminator(pred_mag.detach()), fake)
-                disc_loss = (real_loss + fake_loss) / 2
-
-                disc_loss.backward()
-                if disc_optimizer is not None:
-                    disc_optimizer.step()
-                    disc_optimizer.zero_grad()
-
-                # 步骤2: 训练生成器（判别器参数已固定）
-                optimizer.zero_grad()
-
-                gen_loss = criterion(pred_mag, clean_mag)
-                adv_loss = nn.BCELoss()(discriminator(pred_mag), valid)
-                loss = gen_loss + gan_lambda * adv_loss
-
-                loss.backward()
-                optimizer.step()
-            else:
-                loss = criterion(pred_mag, clean_mag)
-                loss.backward()
-                optimizer.step()
+            loss.backward()
+            optimizer.step()
 
         total_loss += loss.item()
 
@@ -800,9 +722,11 @@ def train() -> None:
     )
 
     if is_main:
-        effective_batch = batch_size * world_size
+        num_gpus = world_size if use_ddp else (len(gpu_ids) if gpu_ids and len(gpu_ids) > 1 else 1)
+        effective_batch = batch_size * num_gpus
+        per_gpu_batch = batch_size // num_gpus if not use_ddp and num_gpus > 1 else batch_size
         print(f"✅ 训练样本: {len(train_dataset)}, 验证样本: {len(val_dataset)}")
-        print(f"📊 每 GPU batch: {batch_size}, 总 batch: {effective_batch}, GPUs: {world_size}")
+        print(f"📊 每 GPU batch: {per_gpu_batch}, 总 batch: {effective_batch}, GPUs: {num_gpus}")
 
     # ========== 4. 模型初始化 ==========
     if is_main:
@@ -852,40 +776,30 @@ def train() -> None:
     if is_main:
         print(f"📈 学习率调度: {lr_scheduler_type}")
 
-    # ========== 6. GAN组件（如果需要） ==========
-    discriminator = None
-    disc_optimizer = None
-    gan_lambda = config_override.get('gan_lambda', 100.0)
-
     # 获取实际模型（处理 DDP / DataParallel 包装）
     raw_model = model.module if isinstance(model, (DDP, nn.DataParallel)) else model
 
-    if model_name == 'unet_v10_gan' or isinstance(raw_model, AudioUNet5GAN):
-        if hasattr(raw_model, 'discriminator'):
-            discriminator = raw_model.discriminator
-            disc_lr = config_override.get('disc_lr', 1e-4)
-            disc_optimizer = torch.optim.Adam(discriminator.parameters(), lr=disc_lr)
-            if is_main:
-                print(f"🤖 GAN训练: λ={gan_lambda}, disc_lr={disc_lr}")
-
-    # ========== 7. 混合精度训练 ==========
+    # ========== 6. 混合精度训练 ==========
     use_amp = config_override.get('mixed_precision', cfg.USE_MIXED_PRECISION)
     scaler = GradScaler() if use_amp else None
     if use_amp and is_main:
         print("⚡ 混合精度训练: 已启用")
 
-    # ========== 8. 早停 ==========
+    # ========== 7. 早停 ==========
     early_stop_patience = args.early_stop
     early_stopping = EarlyStopping(patience=early_stop_patience, min_delta=args.min_delta) if early_stop_patience else None
 
-    # ========== 9. 记录超参数（仅主进程） ==========
+    # ========== 8. 记录超参数（仅主进程） ==========
+    # 统一 GPU 数量计算（与显示逻辑一致）
+    num_gpus = world_size if use_ddp else (len(gpu_ids) if gpu_ids and len(gpu_ids) > 1 else 1)
     config_dict = {
         "experiment_name": experiment_name,
         "model": raw_model.__class__.__name__,
         "total_params": total_params,
         "learning_rate": learning_rate,
-        "batch_size_per_gpu": batch_size,
-        "total_batch_size": batch_size * world_size,
+        "batch_size_per_gpu": batch_size // num_gpus if not use_ddp and num_gpus > 1 else batch_size,
+        "total_batch_size": batch_size * num_gpus,
+        "num_gpus": num_gpus,
         "world_size": world_size,
         "num_epochs": num_epochs,
         "loss_function": loss_type,
@@ -926,9 +840,6 @@ def train() -> None:
         train_loss = train_one_epoch(
             model, train_loader, optimizer, criterion, device,
             scaler=scaler,
-            discriminator=discriminator,
-            disc_optimizer=disc_optimizer,
-            gan_lambda=gan_lambda,
             use_amp=use_amp
         )
         train_losses.append(train_loss)
@@ -981,10 +892,6 @@ def train() -> None:
                 "best_val_loss": best_val_loss,
                 "config": config_dict,
             }
-
-            if discriminator is not None:
-                checkpoint["discriminator_state_dict"] = discriminator.state_dict()
-                checkpoint["disc_optimizer_state_dict"] = disc_optimizer.state_dict()
 
             torch.save(checkpoint, checkpoint_dir / "best_model.pth")
             print(f"  ✨ 新的最佳模型 (Val Loss: {val_loss:.4f})")

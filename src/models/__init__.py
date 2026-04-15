@@ -5,20 +5,18 @@
 - AudioUNet5: 5层标准U-Net（默认模型）
 - AudioUNet5Attention: 5层U-Net + 注意力门
 - AudioUNet5Optimized: 5层U-Net + 注意力+残差+空洞（综合优化）
-- AudioUNet5GAN: 5层U-Net + GAN框架
 """
 
 from .unet_v1 import AudioUNet3
 from .unet_v2 import AudioUNet5
 from .unet_v3_attention import AudioUNet5Attention
 from .unet_v6_optimized import AudioUNet5Optimized
-from .unet_v10_gan import AudioUNet5GAN
 
 from .loss_functions import (
     SpectralLoss,
     SpectralConsistencyLoss,
     MultiTaskLoss,
-    SISDRLoss,
+    SpectralConvergenceLoss,
     MultiResolutionSTFTLoss,
     CompositeLoss,
     AdversarialLoss,
@@ -55,10 +53,10 @@ from .post_processing import (
 __all__ = [
     # 模型
     'AudioUNet3', 'AudioUNet5', 'AudioUNet5Attention',
-    'AudioUNet5Optimized', 'AudioUNet5GAN',
+    'AudioUNet5Optimized',
     # 损失函数
     'SpectralLoss', 'SpectralConsistencyLoss', 'MultiTaskLoss',
-    'SISDRLoss', 'MultiResolutionSTFTLoss', 'CompositeLoss',
+    'SISDRLoss', 'SpectralConvergenceLoss', 'MultiResolutionSTFTLoss', 'CompositeLoss',
     'AdversarialLoss', 'Discriminator',
     # 数据增强
     'AudioAugmentation', 'SpecAugment', 'MixupAugmentation',
@@ -81,7 +79,6 @@ MODEL_CLASSES = {
     'unet_v2': AudioUNet5,
     'unet_v3_attention': AudioUNet5Attention,
     'unet_v6_optimized': AudioUNet5Optimized,
-    'unet_v10_gan': AudioUNet5GAN,
 }
 
 

@@ -47,7 +47,6 @@ class Config:
         'unet_v2': 'AudioUNet5',
         'unet_v3_attention': 'AudioUNet5Attention',
         'unet_v6_optimized': 'AudioUNet5Optimized',
-        'unet_v10_gan': 'AudioUNet5GAN',
     }
 
     DEFAULT_MODEL = 'unet_v2'
@@ -57,7 +56,6 @@ class Config:
         'unet_v2': '5层U-Net (默认模型)',
         'unet_v3_attention': '5层U-Net + 注意力门',
         'unet_v6_optimized': '5层U-Net + 注意力+残差+空洞 (综合优化)',
-        'unet_v10_gan': '5层U-Net + GAN框架',
     }
     
     LOSS_FUNCTIONS = {

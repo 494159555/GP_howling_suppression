@@ -162,37 +162,24 @@ class Discriminator(nn.Module):
         return output
 
 
-class SISDRLoss(nn.Module):
-    """SI-SDR损失（尺度不变信噪比）
+class SpectralConvergenceLoss(nn.Module):
+    """频谱收敛损失（Spectral Convergence Loss）
 
-    在频谱域计算SI-SDR的负值作为损失函数
-    SI-SDR = 10 * log10(||s_target||^2 / ||e_noise||^2)
-    loss = -SI-SDR
+    计算预测频谱与目标频谱之间的相对Frobenius范数误差。
+    SC = ||S - Ŝ||_F / ||S||_F
+    适用于频谱域模型，衡量频谱整体形态的匹配程度。
     """
 
     def __init__(self, epsilon: float = 1e-8):
-        super(SISDRLoss, self).__init__()
+        super(SpectralConvergenceLoss, self).__init__()
         self.epsilon = epsilon
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        # 展平除batch维外的所有维度
-        pred_flat = pred.flatten(start_dim=1)
-        target_flat = target.flatten(start_dim=1)
-
-        # 计算目标标量投影
-        dot = torch.sum(pred_flat * target_flat, dim=1, keepdim=True)
-        s_target_energy = torch.sum(target_flat ** 2, dim=1, keepdim=True) + self.epsilon
-        s_target = (dot / s_target_energy) * target_flat
-
-        # 计算噪声残差
-        e_noise = pred_flat - s_target
-
-        # SI-SDR
-        si_sdr = 10 * torch.log10(
-            torch.sum(s_target ** 2, dim=1) / (torch.sum(e_noise ** 2, dim=1) + self.epsilon) + self.epsilon
-        )
-
-        return -si_sdr.mean()
+        # Frobenius范数：对所有频谱维度求平方和再开根号
+        numerator = torch.norm(pred - target, p='fro', dim=(-2, -1))
+        denominator = torch.norm(target, p='fro', dim=(-2, -1)) + self.epsilon
+        sc_loss = numerator / denominator
+        return sc_loss.mean()
 
 
 class MultiResolutionSTFTLoss(nn.Module):
@@ -237,8 +224,8 @@ class MultiResolutionSTFTLoss(nn.Module):
 class CompositeLoss(nn.Module):
     """复合损失函数
 
-    组合多分辨率STFT损失和SI-SDR损失
-    Composite = α * MultiResolutionSTFT + β * SI-SDR
+    组合多分辨率STFT损失和频谱收敛损失
+    Composite = α * MultiResolutionSTFT + β * SpectralConvergence
     默认: α=1.0, β=0.5
     """
 
@@ -247,12 +234,12 @@ class CompositeLoss(nn.Module):
         self.alpha = alpha
         self.beta = beta
         self.mrstft_loss = MultiResolutionSTFTLoss()
-        self.sisdr_loss = SISDRLoss()
+        self.sc_loss = SpectralConvergenceLoss()
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         mrstft = self.mrstft_loss(pred, target)
-        sisdr = self.sisdr_loss(pred, target)
-        return self.alpha * mrstft + self.beta * sisdr
+        sc = self.sc_loss(pred, target)
+        return self.alpha * mrstft + self.beta * sc
 
 
 class AdversarialLoss(nn.Module):

@@ -118,55 +118,67 @@ def _istft_from_mag_phase(mag_norm, noisy_stft_complex, n_fft, hop_length, norm_
     
     Args:
         mag_norm: 归一化后的幅度谱 [B, 1, freq_bins, T]
-        noisy_stft_complex: 带噪信号的复数STFT [B, freq_bins+1, T] 或 [freq_bins+1, T]
+        noisy_stft_complex: 带噪信号的复数STFT [B, 1, freq_bins+1, T] 或 [B, freq_bins+1, T] 或 [freq_bins+1, T]
         n_fft: FFT大小
         hop_length: 跳跃长度
         norm_min: 归一化最小值
         norm_max: 归一化最大值
     
     Returns:
-        时域波形 tensor
+        时域波形 tensor [B, 1, T]（与数据集波形格式一致）
     """
     eps = 1e-8
     # 反归一化
     mag_log = mag_norm * (norm_max - norm_min) + norm_min
     # 反对数
     mag_linear = 10 ** mag_log
-    # mag_linear 是幅度谱的平方根，所以需要平方得到能量谱
-    # 但实际上我们直接需要幅度，所以 mag_linear 就是幅度
+    
+    # 标准化 noisy_stft_complex 为 3D: [B, freq_bins+1, T]
+    # 数据集 complex_stft_transform 输出 [1, 257, T]，DataLoader collate 后为 [B, 1, 257, T]
+    if noisy_stft_complex.dim() == 4:
+        noisy_stft_complex = noisy_stft_complex.squeeze(1)  # [B, 1, 257, T] → [B, 257, T]
     
     # 获取相位（从noisy_stft_complex）
-    if noisy_stft_complex.dim() == 3:
-        # [B, freq_bins+1, T] -> 扩展维度匹配
-        phase = torch.angle(noisy_stft_complex)
-    else:
-        phase = torch.angle(noisy_stft_complex)
+    phase = torch.angle(noisy_stft_complex)  # [B, 257, T] 或 [257, T]
     
-    # 确保维度匹配：mag_norm 是 [B, 1, 256, T], phase 可能是 [B, 257, T]
+    # 确保维度匹配：mag_norm 是 [B, 1, freq_bins, T]
+    # freq_bins = n_fft//2+1 (e.g., 257 for n_fft=512)
     batch_size = mag_norm.shape[0]
-    freq_bins = mag_norm.shape[2]  # 256
+    freq_bins = mag_norm.shape[2]
     time_frames = mag_norm.shape[3]
     
-    # 取前256个频率bin的相位
+    # 对齐相位与幅度谱的频率/时间维度
     if phase.dim() == 3:
-        phase = phase[:, :freq_bins, :time_frames]  # [B, 256, T]
+        phase = phase[:, :freq_bins, :time_frames]  # [B, freq_bins, T]
     else:
-        phase = phase[:freq_bins, :time_frames]  # [256, T]
+        phase = phase[:freq_bins, :time_frames]
     
     # 去掉channel维度
-    mag_flat = mag_linear.squeeze(1)  # [B, 256, T]
+    mag_flat = mag_linear.squeeze(1)  # [B, freq_bins, T]
     
-    # 构造复数STFT [B, 256, T]
+    # 构造复数STFT [B, freq_bins, T]
     enhanced_stft = mag_flat * torch.exp(1j * phase)
     
-    # 需要补回第257个频率bin（共轭对称），用0填充
-    last_bin = torch.zeros(batch_size, 1, time_frames, 
-                           dtype=enhanced_stft.dtype, device=enhanced_stft.device)
-    enhanced_stft_full = torch.cat([enhanced_stft, last_bin], dim=1)  # [B, 257, T]
+    # 补齐Nyquist频率bin：istft要求 freq_bins = n_fft//2+1 (257)
+    # 数据集裁剪了最后一帧(257→256)，需要补零恢复
+    target_bins = n_fft // 2 + 1
+    if enhanced_stft.shape[1] < target_bins:
+        pad_bins = target_bins - enhanced_stft.shape[1]
+        padding = torch.zeros(
+            enhanced_stft.shape[0], pad_bins, enhanced_stft.shape[2],
+            dtype=enhanced_stft.dtype, device=enhanced_stft.device
+        )
+        enhanced_stft_full = torch.cat([enhanced_stft, padding], dim=1)
+    else:
+        enhanced_stft_full = enhanced_stft
     
     # iSTFT还原
     waveform = torch.istft(enhanced_stft_full, n_fft=n_fft, hop_length=hop_length, 
-                           length=int(16000 * 3.0))  # chunk_size
+                           length=int(16000 * 3.0))  # [B, T]
+    
+    # 统一返回 [B, 1, T] 格式，与数据集波形 (howling_wave/clean_wave) 一致
+    if waveform.dim() == 2:
+        waveform = waveform.unsqueeze(1)  # [B, T] → [B, 1, T]
     
     return waveform
 
@@ -232,12 +244,19 @@ def evaluate_with_metrics(model, dataloader, device, use_timedomain=True) -> Dic
                     )
                     clean_wave_td = clean_wave  # 直接使用原始干净波形
                     
-                    # 在时域信号上计算所有指标
-                    sample_metrics = metrics_calc.calculate_all_metrics(
-                        clean=clean_wave_td,
-                        noisy=noisy_wave_td,
-                        enhanced=enhanced_wave,
+                    # 时域信号质量指标（SNR/PSNR/SI-SDR/STOI/PESQ）
+                    sample_metrics = {
+                        'snr_improvement_db': metrics_calc.calculate_snr(clean_wave_td, enhanced_wave, noisy_wave_td),
+                        'psnr_db': metrics_calc.calculate_psnr(clean_wave_td, enhanced_wave),
+                        'si_sdr_db': metrics_calc.calculate_si_sdr(clean_wave_td, enhanced_wave),
+                        'stoi_score': metrics_calc.calculate_stoi(clean_wave_td, enhanced_wave),
+                        'pesq_score': metrics_calc.calculate_pesq(clean_wave_td, enhanced_wave),
+                    }
+                    # 啸叫抑制指标需要频谱数据（非时域波形）
+                    howling_metrics = metrics_calc.calculate_howling_reduction(
+                        noisy_mag.cpu(), pred_mag.cpu()
                     )
+                    sample_metrics.update(howling_metrics)
                 except Exception as e:
                     # 时域评估失败时回退到频域评估
                     warnings.warn(f"时域评估失败，回退到频域评估: {e}")
@@ -355,11 +374,19 @@ def evaluate_traditional_methods(dataloader, device) -> Dict[str, Dict[str, floa
                                 noisy_mag.cpu(), noisy_stft,
                                 n_fft=cfg.N_FFT, hop_length=cfg.HOP_LENGTH
                             )
-                            sample_metrics = metrics_calc.calculate_all_metrics(
-                                clean=clean_wave,
-                                noisy=noisy_wave_td,
-                                enhanced=enhanced_wave,
+                            # 时域信号质量指标
+                            sample_metrics = {
+                                'snr_improvement_db': metrics_calc.calculate_snr(clean_wave, enhanced_wave, noisy_wave_td),
+                                'psnr_db': metrics_calc.calculate_psnr(clean_wave, enhanced_wave),
+                                'si_sdr_db': metrics_calc.calculate_si_sdr(clean_wave, enhanced_wave),
+                                'stoi_score': metrics_calc.calculate_stoi(clean_wave, enhanced_wave),
+                                'pesq_score': metrics_calc.calculate_pesq(clean_wave, enhanced_wave),
+                            }
+                            # 啸叫抑制指标需要频谱数据
+                            howling_metrics = metrics_calc.calculate_howling_reduction(
+                                noisy_mag.cpu(), pred_mag.cpu()
                             )
+                            sample_metrics.update(howling_metrics)
                         except Exception:
                             sample_metrics = metrics_calc.calculate_all_metrics(
                                 clean=clean_mag,

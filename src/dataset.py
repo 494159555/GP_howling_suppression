@@ -31,6 +31,7 @@ class HowlingDataset(Dataset):
         audio_aug_params=None,
         spec_aug_params=None,
         return_waveform=False,
+        preload_to_memory=False,
     ):
         self.clean_dir = clean_dir
         self.howling_dir = howling_dir
@@ -78,6 +79,26 @@ class HowlingDataset(Dataset):
             n_fft=self.n_fft, hop_length=self.hop_length, power=None
         )
 
+        # 内存缓存
+        self.preload_to_memory = preload_to_memory
+        self._cache = {}
+        if preload_to_memory:
+            self._preload_all()
+
+    def _preload_all(self):
+        """一次性将所有数据预加载到内存，避免训练时磁盘I/O瓶颈"""
+        import sys
+        print(f"  预加载数据到内存: {len(self.filenames)} 个样本...")
+        for idx in range(len(self.filenames)):
+            self._cache[idx] = self._process_sample(idx)
+            if (idx + 1) % 500 == 0 or idx == 0:
+                print(f"    已加载 {idx+1}/{len(self.filenames)}")
+        mem_mb = sum(
+            sum(t.element_size() * t.nelement() for t in (v if isinstance(v, tuple) else (v,)))
+            for v in self._cache.values()
+        ) / 1024 / 1024
+        print(f"  预加载完成! 缓存占用: {mem_mb:.1f} MB")
+
     def _fix_length(self, waveform: torch.Tensor) -> torch.Tensor:
         """将音频波形填充或截断到 chunk_size 长度"""
         length = waveform.shape[1]
@@ -92,20 +113,8 @@ class HowlingDataset(Dataset):
         """数据集样本数"""
         return len(self.filenames)
 
-    def __getitem__(self, idx: int):
-        """获取数据样本
-        
-        Args:
-            idx: 样本索引
-            
-        Returns:
-            当 return_waveform=False (默认，用于训练):
-                (noisy_mag, clean_mag): 预处理后的频谱对，形状[1, 256, T]
-            当 return_waveform=True (用于评估):
-                (noisy_mag, clean_mag, noisy_wave, clean_wave, noisy_stft_complex):
-                额外返回原始波形和复数STFT（用于iSTFT还原时域信号计算STOI/PESQ）
-        """
-        # 1. 加载音频
+    def _process_sample(self, idx: int):
+        """处理单个样本（加载音频+频谱变换+归一化），供缓存和直接调用"""
         file_name = self.filenames[idx]
         howling_path = os.path.join(self.howling_dir, file_name)
         clean_name = file_name.replace('_howling.wav', '_clean.wav')
@@ -118,49 +127,48 @@ class HowlingDataset(Dataset):
             print(f"加载 {file_name} 失败: {e}")
             return self._get_zero_tensors()
 
-        # 2. 音频长度归一化（独立处理，确保两者长度一致）
+        # 音频长度归一化
         howling_wave = self._fix_length(howling_wave)
         clean_wave = self._fix_length(clean_wave)
 
-        # 3. 应用音频增强
+        # 音频增强
         if self.augment and self.audio_aug is not None:
             howling_wave = self.audio_aug(howling_wave)
             clean_wave = self.audio_aug(clean_wave)
 
-        # 4. 频谱变换
+        # 频谱变换
         howling_mag = self.spec_transform(howling_wave).sqrt()
         clean_mag = self.spec_transform(clean_wave).sqrt()
 
-        # 5. 对数变换和归一化
-        eps = 1e-8  # 数值稳定性
-        
-        # 对数变换
+        # 对数变换和归一化
+        eps = 1e-8
         howling_log = torch.log10(howling_mag + eps)
         clean_log = torch.log10(clean_mag + eps)
-
-        # 归一化到[0, 1]
         norm_min = -11.5
         norm_max = 2.5
         howling_norm = (howling_log - norm_min) / (norm_max - norm_min)
         clean_norm = (clean_log - norm_min) / (norm_max - norm_min)
 
-        # 6. 应用频谱增强
+        # 频谱增强
         if self.augment and self.spec_aug is not None:
             howling_norm = self.spec_aug(howling_norm)
             clean_norm = self.spec_aug(clean_norm)
 
-        # 7. 调整维度适配U-Net
         # 裁剪最后一帧 (257 -> 256)
         howling_out = howling_norm[:, :-1, :]
         clean_out = clean_norm[:, :-1, :]
 
-        # 8. 评估模式：额外返回波形和复数STFT
         if self.return_waveform:
-            # 复数STFT（用于评估时结合预测幅度做iSTFT）
             noisy_stft_complex = self.complex_stft_transform(howling_wave)
             return howling_out, clean_out, howling_wave, clean_wave, noisy_stft_complex
 
         return howling_out, clean_out
+
+    def __getitem__(self, idx: int):
+        """获取数据样本（优先从内存缓存读取）"""
+        if idx in self._cache:
+            return self._cache[idx]
+        return self._process_sample(idx)
 
     def _get_zero_tensors(self):
         """生成零张量作为后备"""
