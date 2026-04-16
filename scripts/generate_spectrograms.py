@@ -17,13 +17,35 @@ import os
 import sys
 from pathlib import Path
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# ============ 中文字体设置 ============
+def setup_chinese_font():
+    font_candidates = [
+        '/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc',
+        '/usr/share/fonts/truetype/arphic/uming.ttc',
+        '/usr/share/fonts/truetype/arphic/ukai.ttc',
+    ]
+    for fp in font_candidates:
+        if Path(fp).exists():
+            fm.fontManager.addfont(fp)
+            prop = fm.FontProperties(fname=fp)
+            plt.rcParams['font.family'] = prop.get_name()
+            plt.rcParams['axes.unicode_minus'] = False
+            return
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'WenQuanYi Micro Hei', 'AR PL UMing CN']
+    plt.rcParams['axes.unicode_minus'] = False
+
+setup_chinese_font()
 
 from src.config import cfg
 from src.dataset import HowlingDataset
