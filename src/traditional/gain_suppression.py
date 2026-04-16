@@ -1,6 +1,6 @@
 """增益抑制法
 
-自适应增益控制，抑制啸叫频段
+检测啸叫频段并应用自适应增益衰减
 """
 
 import torch
@@ -10,165 +10,173 @@ import math
 
 class GainSuppressionMethod(nn.Module):
     """增益抑制法
-    
-    检测啸叫频段并应用自适应增益衰减
+
+    在对数域检测啸叫频段（远高于背景水平的窄带峰值），
+    并对该频段施加增益衰减。输入输出均为归一化对数幅度谱 [0,1]。
     """
-    
-    def __init__(self, 
-                 threshold_db=-30.0,
+
+    # 归一化参数（与数据集一致）
+    NORM_MIN = -11.5
+    NORM_MAX = 2.5
+    NORM_RANGE = NORM_MAX - NORM_MIN  # 14.0
+
+    def __init__(self,
+                 threshold_db=10.0,
                  attack_time=0.01,
                  release_time=0.1,
-                 max_attenuation=-20.0,
+                 max_attenuation_db=-12.0,
                  sample_rate=16000,
                  n_fft=512,
                  hop_length=128,
-                 min_freq=1000.0,
-                 max_freq=8000.0):
+                 min_freq=500.0,
+                 max_freq=7800.0,
+                 smoothing_alpha=0.92):
         """初始化增益抑制法
-        
+
         Args:
-            threshold_db: 检测阈值，默认-30dB
-            attack_time: 攻击时间，默认0.01s
-            release_time: 释放时间，默认0.1s
-            max_attenuation: 最大衰减量，默认-20dB
-            sample_rate: 采样率，默认16000
-            n_fft: FFT窗口，默认512
-            hop_length: 跳跃长度，默认128
-            min_freq: 最小检测频率，默认1000Hz
-            max_freq: 最大检测频率，默认8000Hz
+            threshold_db: 啸叫检测阈值(dB)，频谱值超过背景估计多少dB视为啸叫
+            attack_time: 攻击时间(s)
+            release_time: 释放时间(s)
+            max_attenuation_db: 最大衰减量(dB)
+            sample_rate: 采样率
+            n_fft: FFT窗口
+            hop_length: 跳跃长度
+            min_freq: 最小检测频率
+            max_freq: 最大检测频率
+            smoothing_alpha: 背景估计EMA系数
         """
-        super(GainSuppressionMethod, self).__init__()
-        
+        super().__init__()
+
         self.threshold_db = threshold_db
-        self.attack_time = attack_time
-        self.release_time = release_time
-        self.max_attenuation = max_attenuation
+        self.max_attenuation_db = max_attenuation_db
         self.sample_rate = sample_rate
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.min_freq = min_freq
         self.max_freq = max_freq
-        
+        self.smoothing_alpha = smoothing_alpha
+
         # 频率bin范围
         self.freq_resolution = sample_rate / n_fft
-        self.min_bin = int(min_freq / self.freq_resolution)
-        self.max_bin = int(max_freq / self.freq_resolution)
-        
+        self.min_bin = max(1, int(min_freq / self.freq_resolution))
+        self.max_bin = min(int(max_freq / self.freq_resolution), n_fft // 2)
+
         # 攻击和释放系数
         frame_rate = sample_rate / hop_length
         self.attack_coeff = math.exp(-1.0 / (attack_time * frame_rate))
         self.release_coeff = math.exp(-1.0 / (release_time * frame_rate))
-        
-        # 线性域转换
-        self.threshold_linear = 10 ** (threshold_db / 20)
-        self.max_attenuation_linear = 10 ** (max_attenuation / 20)
-        
-        self.register_buffer('gain_mask', None)
-        self.register_buffer('background_estimate', None)
-        
+
+        # 线性域衰减量
+        self.max_attenuation_linear = 10 ** (max_attenuation_db / 20)
+
+    def _denorm(self, x):
+        """归一化 [0,1] -> 对数域 [NORM_MIN, NORM_MAX]"""
+        return x * self.NORM_RANGE + self.NORM_MIN
+
+    def _renorm(self, x):
+        """对数域 -> 归一化 [0,1]"""
+        return (x - self.NORM_MIN) / self.NORM_RANGE
+
     def forward(self, x):
-        """前向传播（向量化版本，消除Python嵌套循环）
+        """前向传播
 
         Args:
-            x: 输入频谱图 [B, 1, F, T]
+            x: 归一化对数幅度谱 [B, 1, F, T]，范围 [0, 1]
 
         Returns:
-            处理后的频谱图 [B, 1, F, T]
+            处理后的归一化对数幅度谱 [B, 1, F, T]
         """
         batch_size, channels, freq_bins, time_frames = x.shape
 
-        # 转换为线性域
-        x_linear = torch.pow(10, x).squeeze(1)  # [B, F, T]
+        # 转换到对数域 (dB-like)
+        x_log = self._denorm(x).squeeze(1)  # [B, F, T]
 
-        # 向量化计算背景估计（EMA）
-        alpha = 0.95
-        background = torch.zeros_like(x_linear)
-        background[:, :, 0] = x_linear[:, :, 0]
+        # 在对数域进行背景估计和啸叫检测
+        # 背景估计：EMA平滑
+        alpha = self.smoothing_alpha
+        background = torch.zeros_like(x_log)
+        background[:, :, 0] = x_log[:, :, 0]
         for t in range(1, time_frames):
-            background[:, :, t] = alpha * background[:, :, t-1] + (1 - alpha) * x_linear[:, :, t]
+            background[:, :, t] = alpha * background[:, :, t - 1] + (1 - alpha) * x_log[:, :, t]
 
-        # 向量化计算SNR
-        snr = x_linear / (background + 1e-8)  # [B, F, T]
+        # 计算信噪比（对数域差值 = dB差）
+        snr_db = x_log - background  # [B, F, T]
 
-        # 向量化啸叫检测（跨所有时间帧同时计算）
-        howling_mask = self._detect_howling_vectorized(snr, freq_bins)  # [B, F, T]
+        # 局部峰值检测
+        is_peak = self._detect_peaks(x_log, freq_bins)
 
-        # 计算目标增益
-        target_gain = torch.where(
+        # 频率范围掩码
+        freq_mask = torch.zeros(freq_bins, device=x.device, dtype=torch.bool)
+        freq_mask[self.min_bin:self.max_bin] = True
+
+        # 啸叫检测：高于阈值 + 局部峰值 + 在频率范围内
+        howling_mask = (snr_db > self.threshold_db) & is_peak & freq_mask.unsqueeze(0).unsqueeze(2)
+
+        # 计算目标增益（对数域：0 或 max_attenuation_db）
+        target_gain_db = torch.where(
             howling_mask,
-            torch.tensor(self.max_attenuation_linear, device=x.device),
-            torch.tensor(1.0, device=x.device)
+            torch.tensor(self.max_attenuation_db, device=x.device),
+            torch.tensor(0.0, device=x.device)
         )
 
-        # 顺序更新增益掩码（攻击/释放时间常数要求顺序依赖）
-        gain_mask = torch.ones_like(x_linear)
+        # 平滑增益变化（攻击/释放）
+        smooth_gain_db = torch.zeros_like(target_gain_db)
+        smooth_gain_db[:, :, 0] = target_gain_db[:, :, 0]
         for t in range(1, time_frames):
-            gain_diff = target_gain[:, :, t] - gain_mask[:, :, t-1]
-            gain_change = torch.where(
+            gain_diff = target_gain_db[:, :, t] - smooth_gain_db[:, :, t - 1]
+            coeff = torch.where(
                 gain_diff < 0,
-                gain_diff * (1 - self.attack_coeff),
-                gain_diff * (1 - self.release_coeff)
+                torch.tensor(self.attack_coeff, device=x.device),
+                torch.tensor(self.release_coeff, device=x.device)
             )
-            gain_mask[:, :, t] = gain_mask[:, :, t-1] + gain_change
+            smooth_gain_db[:, :, t] = smooth_gain_db[:, :, t - 1] + (1 - coeff) * gain_diff
 
-        # 应用增益
-        processed_spec = x_linear * gain_mask
+        # 应用增益（对数域加法 = 线性域乘法）
+        # 10^(gain_db/20) 的 log10 = gain_db/20
+        processed_log = x_log + smooth_gain_db / 20.0
 
-        # 转换回log域
-        processed_log = torch.log10(processed_spec.unsqueeze(1) + 1e-8)
+        # 归一化回 [0,1]
+        result = self._renorm(processed_log).unsqueeze(1)
 
-        return processed_log
+        return result
 
-    def _detect_howling_vectorized(self, snr, freq_bins):
-        """向量化啸叫检测
-
-        同时处理所有batch和所有时间帧，使用tensor操作替代Python循环。
+    def _detect_peaks(self, x_log, freq_bins):
+        """检测对数域频谱中的局部峰值
 
         Args:
-            snr: 信噪比 [B, F, T]
+            x_log: 对数域幅度谱 [B, F, T]
             freq_bins: 频率bin数量
 
         Returns:
-            howling_mask: 啸叫掩码 [B, F, T]
+            is_peak: 峰值掩码 [B, F, T]
         """
-        # 阈值检测
-        above_threshold = snr > self.threshold_linear
-
-        # 局部峰值检测：当前bin必须严格大于所有邻居
-        is_peak = torch.ones_like(snr, dtype=torch.bool)
+        is_peak = torch.ones_like(x_log, dtype=torch.bool)
         for df in [-2, -1, 1, 2]:
-            shifted = torch.roll(snr, shifts=-df, dims=1)
-            # 边界处理：越界邻居不参与判断（设为-inf使比较恒True）
+            shifted = torch.roll(x_log, shifts=-df, dims=1)
             if df < 0:
                 shifted[:, :abs(df), :] = float('-inf')
             else:
                 shifted[:, -df:, :] = float('-inf')
-            is_peak = is_peak & (snr > shifted)
+            is_peak = is_peak & (x_log > shifted)
 
-        # 频率范围掩码
-        freq_mask = torch.zeros_like(snr, dtype=torch.bool)
-        max_bin = min(self.max_bin, freq_bins)
-        freq_mask[:, self.min_bin:max_bin, :] = True
-
-        return above_threshold & is_peak & freq_mask
+        return is_peak
 
 
-def create_gain_suppression_method(threshold_db=-30.0, **kwargs):
+def create_gain_suppression_method(threshold_db=10.0, **kwargs):
     """创建增益抑制法实例"""
     return GainSuppressionMethod(threshold_db=threshold_db, **kwargs)
 
 
 if __name__ == "__main__":
     batch_size, channels, freq_bins, time_frames = 2, 1, 256, 100
-    test_input = torch.randn(batch_size, channels, freq_bins, time_frames).abs()
-    test_input = torch.log10(test_input + 1e-8)
-    test_input[:, 0, 50:60, 20:80] += 2.0
-    
-    method = GainSuppressionMethod(threshold_db=-30.0)
+    test_input = torch.rand(batch_size, channels, freq_bins, time_frames)
+
+    # 添加模拟啸叫峰值
+    test_input[:, 0, 50:55, 20:80] = 0.9
+
+    method = GainSuppressionMethod(threshold_db=10.0)
     output = method(test_input)
-    
-    print(f"输入形状: {test_input.shape}")
-    print(f"输出形状: {output.shape}")
-    print(f"输入范围: [{test_input.min():.4f}, {test_input.max():.4f}]")
-    print(f"输出范围: [{output.min():.4f}, {output.max():.4f}]")
+
+    print(f"输入形状: {test_input.shape}, 范围: [{test_input.min():.4f}, {test_input.max():.4f}]")
+    print(f"输出形状: {output.shape}, 范围: [{output.min():.4f}, {output.max():.4f}]")
     print("增益抑制法测试通过！")

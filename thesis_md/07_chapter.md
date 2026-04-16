@@ -33,3 +33,29 @@
 [16] Paszke A, Gross S, Massa F, et al. PyTorch: An imperative style, high-performance deep learning library[C]. Advances in Neural Information Processing Systems (NeurIPS), 2019.
 
 [17] Luo Y, Mesgarani N. Conv-TasNet: Surpassing ideal time-frequency magnitude masking for speech separation[J]. IEEE/ACM Transactions on Audio, Speech, and Language Processing, 2019, 27(8): 1256-1266.
+
+[18] Allen J B, Berkley D A. Image method for efficiently simulating small-room acoustics[J]. The Journal of the Acoustical Society of America, 1979, 65(4): 943-950.
+
+[19] Park D S, Chan W, Zhang Y, et al. SpecAugment: A simple data augmentation method for automatic speech recognition[C]. Proc. Interspeech, 2019: 2613-2617.
+
+[20] Le Roux J, Wisdom S, Erdogan H, et al. SDR–half-baked or well done?[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2019: 626-630.
+
+[21] Taal C H, Hendriks R C, Heusdens R, et al. An algorithm for intelligibility prediction of time-frequency weighted noisy speech[J]. IEEE Transactions on Audio, Speech, and Language Processing, 2011, 19(7): 2125-2136.
+
+[22] ITU-T Recommendation P.862. Perceptual evaluation of speech quality (PESQ): An objective method for end-to-end speech quality assessment of narrow-band telephone networks and speech codecs[S]. International Telecommunication Union, Geneva, 2001.
+
+[23] Zhang H, Cisse M, Dauphin Y N, et al. mixup: Beyond empirical risk minimization[C]. International Conference on Learning Representations (ICLR), 2018.
+
+[24] Yu F, Koltun V. Multi-scale context aggregation by dilated convolutions[C]. International Conference on Learning Representations (ICLR), 2016.
+
+[25] Ioffe S, Szegedy C. Batch normalization: Accelerating deep network training by reducing internal covariate shift[C]. International Conference on Machine Learning (ICML), 2015: 448-456.
+
+[26] Vaswani A, Shazeer N, Parmar N, et al. Attention is all you need[C]. Advances in Neural Information Processing Systems (NeurIPS), 2017: 5998-6008.
+
+[27] Yamamoto R, Song E, Kim J-M. Parallel WaveGAN: A fast waveform generation model based on generative adversarial networks with multi-resolution spectrogram[C]. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2020: 6199-6203.
+
+[28] Smith L N, Topin N. Super-convergence: Very fast training of neural networks using large learning rates[C]. Proceedings of SPIE, 2019, 11006: 120-137.
+
+[29] Loshchilov I, Hutter F. SGDR: Stochastic gradient descent with warm restarts[C]. International Conference on Learning Representations (ICLR), 2017.
+
+[30] Défossez A, Usunier N, Bottou L, et al. Music source separation in the waveform domain[J]. arXiv preprint arXiv:1911.13254, 2019.

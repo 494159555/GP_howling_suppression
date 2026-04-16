@@ -20,7 +20,10 @@ class Config:
     
     VAL_CLEAN_DIR = DATA_ROOT / "dev" / "clean"
     VAL_NOISY_DIR = DATA_ROOT / "dev" / "howling"
-    
+
+    TEST_CLEAN_DIR = DATA_ROOT / "test" / "clean"
+    TEST_NOISY_DIR = DATA_ROOT / "test" / "howling"
+
     EXP_DIR = PROJECT_ROOT / "experiments"
     
     # ============ 音频处理参数 ============
